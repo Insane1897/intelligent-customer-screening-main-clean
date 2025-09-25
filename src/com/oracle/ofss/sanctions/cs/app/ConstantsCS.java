@@ -1,0 +1,182 @@
+package com.oracle.ofss.sanctions.cs.app;
+
+import java.io.File;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+
+public class ConstantsCS {
+    public static final Map<String, String> TABLE_WL_MAP;
+    static {
+        Map<String, String> map = new HashMap<>();
+        map.put("COUNTRY", "FCC_TF_DIM_COUNTRY");
+        map.put("CITY", "FCC_TF_DIM_CITY");
+        map.put("GOODS", "FCC_TF_DIM_GOODS");
+        map.put("PORT", "FCC_TF_DIM_PORT");
+        map.put("STOP_KEYWORDS", "FCC_TF_DIM_STOPKEYWORDS");
+        map.put("IDENTIFIER", "FCC_DIM_IDENTIFIER");
+        map.put("WCPREM", "FCC_WL_WC_PREMIUM");
+        map.put("WCSTANDARD", "FCC_WL_WC_STANDARD");
+        map.put("DJW", "FCC_WL_DJW");
+        map.put("OFAC", "FCC_WL_OFAC");
+        map.put("HMT", "FCC_WL_HMT");
+        map.put("EU", "FCC_WL_EUROPEAN_UNION");
+        map.put("UN", "FCC_WL_UN");
+        map.put("PRV_WL1", "FCC_WL_PRIVATELIST");
+
+        TABLE_WL_MAP = Collections.unmodifiableMap(map); // Make it read-only
+    }
+
+    public static final Map<String, String> WEBSERVICE_MAP;
+    static {
+        Map<String, String> map = new HashMap<>();
+        map.put("1", "NameAndAddress");
+        map.put("2", "Identifier");
+        map.put("5", "Port");
+        map.put("6", "Goods");
+
+        WEBSERVICE_MAP = Collections.unmodifiableMap(map); // Make it read-only
+    }
+
+    public static String ENCODER = "UTF-8";
+
+    public static String MODULE_RAW_MSG_GENERATOR =  "module.rawMsgGenerator";
+    public static String MODULE_RAW_MSG_PROCESSOR =  "module.rawMsgProcessor";
+
+    public static String TAGNAME =  "tagName";
+    public static String WEBSERVICE =  "webService";
+    public static String EXACT =  "Exact";
+    public static String FUZZY =  "Fuzzy - ";
+    public static String WATCHLIST_TYPE =  "watchListType";
+    public static String WATCHLIST_TYPES = "watchlistTypes";
+    public static String MAX_RAW_MESSAGES = "maxRawMessages";
+    public static String TRANSACTION_SERVICE =  "msgPosting.transactionService";
+    public static String TOKEN_URL =  "msgPosting.tokenUrl";
+    public static String CLIENT_ID =  "msgPosting.client.id";
+    public static String CLIENT_SECRET =  "msgPosting.client.secret";
+    public static String DEVCORP7 =  "msgPosting.devcorp7";
+    public static String NAMESPACE =  "msgPosting.namespace";
+    public static String RETRY_REQUIRED_FLAG =  "msgPosting.retryRequiredFlag";
+    public static String RETRY_MAX_COUNT =  "msgPosting.retryMaxCount";
+    public static String RETRY_REFRESH_INTERVAL =  "msgPosting.bearerTokenRefreshInterval";
+    public static String RESTART_FLAG =  "msgPosting.restartFlag";
+    public static String POSTING_ENDPOINT =  "-transaction-service/sync/process";
+    public static String TRANSACTION_TOKEN =  "transactionToken";
+    public static String FEEDBACK_DATA =  "feedbackData";
+    public static String MATCHING_STATUS =  "status";
+    public static String MATCHING_COUNT =  "matchCount";
+    public static String WEBSERVICE_ID =  "webServiceId";
+    public static final String COMMENTS = "Comments";
+
+
+    public static String CED1 =  "ced1";
+    public static String CED2 =  "ced2";
+    public static String CED3 =  "ced3";
+    public static String REP1 =  "rep1";
+    public static String REP2 =  "rep2";
+    public static String REP3 =  "rep3";
+    public static String MAX_ROWS =  "maxRows";
+    public static final int MAX_MSG_LEN = 32000;
+    public static String JDBC_URL =  "jdbcurl";
+    public static String JDBC_DRIVER =  "jdbcdriver";
+    public static String WALLET_NAME =  "walletName";
+    public static String WHERE_CLAUSE =  "whereClause";
+    public static String REPLACE_SRC =  "replace.src";
+    public static String REPLACE_TARGET_COLUMN =  "replace.targetColumn";
+    public static final String TOGGLE_MATCHING_ENGINE = "toggleMatchingEngine";
+
+
+    public static String ADDITIONAL_DATA =  "additionalData";
+    public static String TABLE =  "table";
+    public static String UID =  "uid";
+    public static String COLUMN =  "column";
+    public static String TOKEN =  "token";
+    public static String VALUE =  "value";
+    public static String ORIGINAL_VALUE =  "originalValue";
+    public static String CED =  "ced";
+    public static String IDEN_TOKEN =  "identifierToken";
+    public static String IDEN_VALUE =  "identifierValue";
+    public static String IDEN_PREFIX =  "ID";
+
+    public static String DATE_FORMAT =  "yyyy-MM-dd HH:mm:ss.SSS";
+
+    public static String WAIT_MSG =  "Wait for a while...It's gonna finish";
+    public static String HOLD_ON_MSG_1 =  "Hold on...It's almost completed";
+    public static String HOLD_ON_MSG_2 =  "Looking for Tortoise...Will find it soon";
+    public static String SUCCESS_MSG =  "Heyy...Here it is";
+    public static String LOAD_MSG =  "zzzz...on the way";
+
+
+    public static String SOURCE_FILE_NAME = "source";
+    public static String CONFIG_FILE_NAME = "config";
+    public static String OUTPUT_FILE_NAME = "output";
+
+    public static String OUTPUT_FOLDER_NAME = "out";
+    public static String BIN_FOLDER_NAME = "bin";
+
+    public static String CURRENT_DIRECTORY = System.getProperty("user.dir");
+    public static File PARENT_DIRECTORY = new File(CURRENT_DIRECTORY).getParentFile();
+    public static String SOURCE_FILE_PATH = PARENT_DIRECTORY+File.separator+ConstantsCS.BIN_FOLDER_NAME+File.separator+ConstantsCS.SOURCE_FILE_NAME+".json";
+    public static String CONFIG_FILE_PATH = PARENT_DIRECTORY+File.separator+ConstantsCS.BIN_FOLDER_NAME+File.separator+ConstantsCS.CONFIG_FILE_NAME+".properties";
+    public static File OUTPUT_FOLDER = new File(ConstantsCS.PARENT_DIRECTORY, ConstantsCS.OUTPUT_FOLDER_NAME);
+    public static File OUTPUT_XLSX_FILE_PATH = new File(OUTPUT_FOLDER,ConstantsCS.OUTPUT_FILE_NAME+".xlsx");
+    public static File OUTPUT_JSON_FILE_PATH = new File(ConstantsCS.OUTPUT_FOLDER, ConstantsCS.OUTPUT_FILE_NAME + ".json");
+
+    public static String PASS = "PASS";
+    public static String FAIL = "FAIL";
+
+    public static String SEQ_NO = "SeqNo";
+    public static String RULE = "RULE";
+    public static String MESSAGE = "Message ";
+    public static String TAG = "Tag";
+    public static String SOURCE_INPUT = "Source Input";
+    public static String TARGET_INPUT = "Target Input";
+    public static String TARGET_COLUMN = "Target Column";
+    public static String WATCHLIST = "Watchlist";
+    public static String NUID = "N_UID";
+    public static String TRXN_TOKEN = "Transaction Token";
+    public static String MATCH_COUNT = "Match Count";
+    public static String STATUS = "Status";
+    public static String FEEDBACK_STATUS = "Feedback Status";
+    public static String TEST_STATUS = "Test Status";
+
+    public static final String COLUMN_MISMATCH_COMMENT = "Column name didn't match";
+    public static final String NO_MATCH_COMMENT = "No Match";
+
+    // CS-specific
+    public static String CANDIDATE_TYPE = "candidateType";
+    public static String EXECUTE_URL = "msgPostingCS.executeUrl";
+    public static String GET_URL_TEMPLATE = "msgPostingCS.getUrlTemplate";
+    public static String REFRESH_CACHE_ENDPOINT_1 = "toggle.cs.refreshCacheEndpoints[1]";
+    public static String REFRESH_CACHE_ENDPOINT_2 = "toggle.cs.refreshCacheEndpoints[2]";
+
+    // New for performance and candidate type
+    public static String GENERATE_THREAD_POOL_SIZE = "generate.threadPoolSize";
+    public static String CANDIDATE_TYPE_BOTH = "BOTH";
+
+    // Job names for toggle
+    public static String IND_JOB_OS = "IndJobNameOS";
+    public static String IND_JOB_OT = "IndJobNameOT";
+    public static String ENT_JOB_OS = "EntJobNameOS";
+    public static String ENT_JOB_OT = "EntJobNameOT";
+
+    // Toggle analysis control
+    public static String ANALYZE_AFTER_TOGGLE = "analyzeAfterToggle";
+    public static String ANALYZER = "analyzer";
+
+    // Cache refresh control
+    public static String REFRESH_CACHE_REQUIRED = "refreshCacheRequired";
+
+    // New synonym and stopword configuration
+    public static String SYN_IND_LOOKUP_IDS = "syn.ind.lookupIds";
+    public static String SYN_ENT_LOOKUP_IDS = "syn.ent.lookupIds";
+    public static String STOP_IND_LOOKUP_IDS = "stop.ind.lookupIds";
+    public static String STOP_ENT_LOOKUP_IDS = "stop.ent.lookupIds";
+    public static String SYNONYM_MAX_COMBOS = "synonymMaxCombos";
+
+    // Transliteration watchlists
+    public static String TRANSLIT_WATCHLISTS = "translit.watchlists";
+
+    // CED random replace flag
+    public static String CED_RANDOM = "cedRandom";
+}
