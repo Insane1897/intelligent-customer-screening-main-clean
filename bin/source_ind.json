@@ -1,0 +1,46 @@
+{
+    "requestedBy": "null",
+    "requestJson": {
+        "Candidate": [
+            {
+                "Source Request ID": "",
+                "Applicant ID": "",
+                "Candidate Jurisdiction": "AMEA",
+                "Business Domain": "a",
+                "First Name": "",
+                "Middle Name": "",
+                "Last Name": "",
+                "Title": "",
+                "Full Name": "__FULL_NAME__",
+                "Alias": [],
+                "Date Of Birth": "",
+                "Year Of Birth": 0,
+                "SSN/TIN": "",
+                "Gender": "",
+                "Primary Citizenship": [],
+                "Secondary Citizenship": [],
+                "Country Of Birth": "AL",
+                "Country Of Residence": [],
+                "Existing Internal ID": "",
+                "Address": [
+                    {
+                        "Street Line 1": "",
+                        "City": "",
+                        "State": "",
+                        "Country": "",
+                        "Postal Code": ""
+                    }
+                ],
+                "Identification Document": [
+                    {
+                        "Document Type": "",
+                        "Document Number": "",
+                        "Issuing Country": ""
+                    }
+                ],
+                "Candidate Type": "IND",
+                "searchWithCase": false
+            }
+        ]
+    }
+}

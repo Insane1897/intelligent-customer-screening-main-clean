@@ -174,4 +174,47 @@ public static List<String> loadFlatLookupValuesByIds(String idsCsv) throws Excep
             throw new Exception("Failed to update matching engine tables", e);
         }
     }
+
+    public static void updateMatchingEngineTargetOnly(String currentEngine, String targetEngine) throws Exception {
+        try (Connection conn = getDbConnection()) {
+            conn.setAutoCommit(false);
+
+            // 1. FCC_MR_C_MATCHINGTARGET updates
+            // First, set all rows for target engine to 'N'
+            String updateTargetToN = "UPDATE FCC_MR_C_MATCHINGTARGET SET F_LRI_FLAG = 'N' WHERE F_ES_OS = ?";
+            try (PreparedStatement pstmt = conn.prepareStatement(updateTargetToN)) {
+                pstmt.setString(1, targetEngine);
+                pstmt.executeUpdate();
+            }
+
+            // Pick the most recent row for target engine and mark 'Y'
+            String updateTargetToY = "UPDATE FCC_MR_C_MATCHINGTARGET " +
+                "SET F_LRI_FLAG = 'Y', V_ACTION_BY = 'SYSTEM', D_ACTION = SYSDATE, " +
+                "V_MATCHING_ENGINE = CASE WHEN ? = 'OS' THEN 'Open Search' ELSE 'Oracle Text' END " +
+                "WHERE F_ES_OS = ? AND (N_ID, D_ACTION) IN (" +
+                "    SELECT N_ID, D_ACTION FROM FCC_MR_C_MATCHINGTARGET " +
+                "    WHERE F_ES_OS = ? ORDER BY D_ACTION DESC, N_ID DESC FETCH FIRST 1 ROWS ONLY)";
+            try (PreparedStatement pstmt = conn.prepareStatement(updateTargetToY)) {
+                pstmt.setString(1, targetEngine);
+                pstmt.setString(2, targetEngine);
+                pstmt.setString(3, targetEngine);
+                pstmt.executeUpdate();
+            }
+
+            // Flip the current engine row to 'N'
+            String updateCurrentToN = "UPDATE FCC_MR_C_MATCHINGTARGET " +
+                "SET F_LRI_FLAG = 'N', V_ACTION_BY = 'SYSTEM', D_ACTION = SYSDATE " +
+                "WHERE F_ES_OS = ?";
+            try (PreparedStatement pstmt = conn.prepareStatement(updateCurrentToN)) {
+                pstmt.setString(1, currentEngine);
+                pstmt.executeUpdate();
+            }
+
+            conn.commit();
+            System.out.println("Matching engine toggled from " + currentEngine + " to " + targetEngine + " (FCC_MR_C_MATCHINGTARGET only).");
+        } catch (Exception e) {
+            e.printStackTrace();
+            throw new Exception("Failed to update matching engine target table", e);
+        }
+    }
 }

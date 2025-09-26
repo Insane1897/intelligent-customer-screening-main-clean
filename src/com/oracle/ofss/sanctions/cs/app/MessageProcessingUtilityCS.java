@@ -490,13 +490,21 @@ try {
         try {
             conn = SQLUtilityCS.getDbConnection();
 
-            // Determine pipeline name based on engine and candidate type
-            String pipelineKey = matchingEngine.toLowerCase() + "." + candidateType.toLowerCase() + ".pipeline";
+            // Load properties for common pipeline override
             Properties props = new Properties();
             try (FileReader reader = new FileReader(ConstantsCS.CONFIG_FILE_PATH)) {
                 props.load(reader);
             }
-            String pipelineName = props.getProperty(pipelineKey, "Individual Real Time Screening"); // fallback
+
+            // Check for common pipeline override first
+            String commonKey = "common." + candidateType.toLowerCase() + ".pipeline";
+            String pipelineName = props.getProperty(commonKey);
+
+            // Fall back to original engine-specific logic if common not set
+            if (pipelineName == null || pipelineName.trim().isEmpty()) {
+                String pipelineKey = matchingEngine.toLowerCase() + "." + candidateType.toLowerCase() + ".pipeline";
+                pipelineName = props.getProperty(pipelineKey, "Individual Real Time Screening"); // fallback
+            }
 
             Map<String, String> idToName = loadRuleSetNames(conn, pipelineName);
 

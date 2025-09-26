@@ -1,0 +1,36 @@
+{
+    "requestedBy": "null",
+    "requestJson": {
+        "Candidate": [
+            {
+                "Source Request ID": "",
+                "Applicant ID": "",
+                "Candidate Jurisdiction": "AMEA",
+                "Business Domain": "a",
+                "Organization Name": "__ORG_NAME__",
+                "SSN/TIN": "",
+                "Country Of Incorporation": "AL",
+                "Country Of Taxation": "",
+                "Existing Internal ID": "",
+                "Address": [
+                    {
+                        "Street Line 1": "",
+                        "City": "",
+                        "State": "",
+                        "Country": "",
+                        "Postal Code": ""
+                    }
+                ],
+                "Identification Document": [
+                    {
+                        "Document Type": "",
+                        "Document Number": "",
+                        "Issuing Country": ""
+                    }
+                ],
+                "Candidate Type": "ENT",
+                "searchWithCase": false
+            }
+        ]
+    }
+}

@@ -18,7 +18,7 @@ public class ToggleMatchingEngineCS {
         String currentEngine = findCurrentMatchingEngine();
         String newEsOs = toggle();
 
-        // Load properties and update job names in FCC_CS_JRSDN_ENTITY_PIPELINE_MAP
+        // Load properties for cache refresh settings
         Properties props = new Properties();
         try (FileReader reader = new FileReader(ConstantsCS.CONFIG_FILE_PATH)) {
             props.load(reader);
@@ -27,11 +27,17 @@ public class ToggleMatchingEngineCS {
             throw e;
         }
 
+        // COMMENTED OUT: No longer updating FCC_CS_JRSDN_ENTITY_PIPELINE_MAP during toggle
+        /*
         boolean toOS = newEsOs.equals("OS");
         String jobInd = props.getProperty(toOS ? ConstantsCS.IND_JOB_OS : ConstantsCS.IND_JOB_OT);
         String jobEnt = props.getProperty(toOS ? ConstantsCS.ENT_JOB_OS : ConstantsCS.ENT_JOB_OT);
 
         SQLUtilityCS.updateMatchingEngine(currentEngine, newEsOs, jobInd, jobEnt);
+        */
+
+        // NEW: Update only FCC_MR_C_MATCHINGTARGET table
+        SQLUtilityCS.updateMatchingEngineTargetOnly(currentEngine, newEsOs);
 
         String refreshRequired = props.getProperty(ConstantsCS.REFRESH_CACHE_REQUIRED, "Y");
         if ("Y".equalsIgnoreCase(refreshRequired)) {
@@ -115,66 +121,10 @@ public class ToggleMatchingEngineCS {
     }
 
     private String toggle() throws Exception {
-        Connection conn = null;
-        try {
-            conn = SQLUtilityCS.getDbConnection();
-            conn.setAutoCommit(false);
-
-            String currentEsOs = findCurrentMatchingEngine();
-
-            // Update the active row to 'N'
-            String updateSql = "UPDATE fcc_mr_c_matchingtarget SET F_LRI_FLAG = 'N', V_ACTION_BY = 'utility', D_ACTION = ? WHERE N_ID = ?";
-            try (PreparedStatement pstmtUpdate = conn.prepareStatement(updateSql)) {
-                pstmtUpdate.setTimestamp(1, new Timestamp(System.currentTimeMillis()));
-                pstmtUpdate.setInt(2, this.currentNId);
-                pstmtUpdate.executeUpdate();
-            }
-
-            // Determine the new values
-            String newEsOs = "OS".equals(currentEsOs) ? "OT" : "OS";
-            String newMatchingEngine = "OS".equals(newEsOs) ? "Open Search" : "Oracle Text";
-
-            // Get max N_ID
-            String queryMaxId = "SELECT MAX(N_ID) AS MAX_ID FROM fcc_mr_c_matchingtarget";
-            int newNId;
-            try (PreparedStatement pstmtMax = conn.prepareStatement(queryMaxId);
-                 ResultSet rsMax = pstmtMax.executeQuery()) {
-                rsMax.next();
-                newNId = rsMax.getInt("MAX_ID") + 1;
-            }
-
-            // Insert the new row with 'Y'
-            String insertSql = "INSERT INTO fcc_mr_c_matchingtarget (N_ID, V_ACTION_BY, D_ACTION, F_LRI_FLAG, F_ES_OS, V_MATCHING_ENGINE) VALUES (?, ?, ?, ?, ?, ?)";
-            try (PreparedStatement pstmtInsert = conn.prepareStatement(insertSql)) {
-                pstmtInsert.setInt(1, newNId);
-                pstmtInsert.setString(2, "appuser");
-                pstmtInsert.setTimestamp(3, new Timestamp(System.currentTimeMillis()));
-                pstmtInsert.setString(4, "Y");
-                pstmtInsert.setString(5, newEsOs);
-                pstmtInsert.setString(6, newMatchingEngine);
-                pstmtInsert.executeUpdate();
-            }
-
-            conn.commit();
-            return newEsOs;
-        } catch (Exception e) {
-            if (conn != null) {
-                try {
-                    conn.rollback();
-                } catch (SQLException ex) {
-                    // Ignore rollback error
-                }
-            }
-            throw e;
-        } finally {
-            if (conn != null) {
-                try {
-                    conn.close();
-                } catch (SQLException e) {
-                    // Ignore close error
-                }
-            }
-        }
+        String currentEsOs = findCurrentMatchingEngine();
+        // Determine the new engine (opposite of current)
+        String newEsOs = "OS".equals(currentEsOs) ? "OT" : "OS";
+        return newEsOs;
     }
 
     public String findCurrentMatchingEngine() throws Exception {

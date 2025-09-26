@@ -115,7 +115,7 @@ public class ConstantsCS {
     public static String BIN_FOLDER_NAME = "bin";
 
     public static String CURRENT_DIRECTORY = System.getProperty("user.dir");
-    public static File PARENT_DIRECTORY = new File(CURRENT_DIRECTORY).getParentFile();
+    public static File PARENT_DIRECTORY = new File(CURRENT_DIRECTORY);
     public static String SOURCE_FILE_PATH = PARENT_DIRECTORY+File.separator+ConstantsCS.BIN_FOLDER_NAME+File.separator+ConstantsCS.SOURCE_FILE_NAME+".json";
     public static String CONFIG_FILE_PATH = PARENT_DIRECTORY+File.separator+ConstantsCS.BIN_FOLDER_NAME+File.separator+ConstantsCS.CONFIG_FILE_NAME+".properties";
     public static File OUTPUT_FOLDER = new File(ConstantsCS.PARENT_DIRECTORY, ConstantsCS.OUTPUT_FOLDER_NAME);
