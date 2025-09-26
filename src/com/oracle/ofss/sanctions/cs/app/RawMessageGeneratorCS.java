@@ -186,6 +186,25 @@ public class RawMessageGeneratorCS {
         String srcFile = loadJsonFromFile(srcFilePath, props);
         JSONObject templateJson = new JSONObject(srcFile);
 
+        // Get dynamic token mappings for this candidate type
+        Map<String, String> tokenToColumnMap = getTokenMappings(type, props);
+
+        // Filter to only tokens present in the JSON template
+        Map<String, String> filteredTokenToColumnMap = new LinkedHashMap<>();
+        String templateContent = templateJson.toString();
+        for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
+            if (templateContent.contains(entry.getKey())) {
+                filteredTokenToColumnMap.put(entry.getKey(), entry.getValue());
+            }
+        }
+
+        String variationToken = "IND".equalsIgnoreCase(type) ? "__FULL_NAME__" : "__ORG_NAME__";
+        if (!filteredTokenToColumnMap.containsKey(variationToken)) {
+            System.err.println("Variation token " + variationToken + " not found in template - skipping processing for " + type);
+            return;
+        }
+        String variationColumn = filteredTokenToColumnMap.get(variationToken);
+
         for (String wlType : watchlistTypes) {
             wlType = wlType.trim();
             if (wlType.isEmpty()) continue;
@@ -193,21 +212,33 @@ public class RawMessageGeneratorCS {
             String tableName = ConstantsCS.TABLE_WL_MAP.get(wlType);
             if (tableName == null) continue;
 
-            List<RowData> rows = prepareQueryAndGetTableData(connection, props, tableName, type);
-            List<RowData> splitRows = splitSemicolonNames(rows, type);
+            List<RowData> rows = prepareQueryAndGetTableData(connection, props, tableName, type, filteredTokenToColumnMap.values());
+            List<RowData> splitRows = splitSemicolonNames(rows, type, filteredTokenToColumnMap, variationToken);
 
-            generateRawMessagesForRows(splitRows, props, templateJson, tableName, tagName, webserviceId, type, messages, wlType);
+            generateRawMessagesForRows(splitRows, props, templateJson, tableName, tagName, webserviceId, type, messages, wlType, filteredTokenToColumnMap, variationToken);
 
             // Transliteration: select non-English rows and generate messages
             if ("Y".equalsIgnoreCase(props.getProperty("enableTransliteration"))) {
-                List<RowData> translitRows = prepareQueryAndGetTableDataForTranslit(connection, props, tableName, type);
-                List<RowData> translitSplitRows = splitSemicolonNames(translitRows, type);
-                generateTranslitMessagesForRows(translitSplitRows, props, templateJson, tableName, tagName, webserviceId, type, messages, wlType);
+                List<RowData> translitRows = prepareQueryAndGetTableDataForTranslit(connection, props, tableName, type, filteredTokenToColumnMap.values());
+                List<RowData> translitSplitRows = splitSemicolonNames(translitRows, type, filteredTokenToColumnMap, variationToken);
+                generateTranslitMessagesForRows(translitSplitRows, props, templateJson, tableName, tagName, webserviceId, type, messages, wlType, filteredTokenToColumnMap, variationToken);
             }
         }
     }
 
-    private static List<RowData> prepareQueryAndGetTableData(Connection connection, Properties props, String tableName, String candidateType) throws Exception {
+    private static Map<String, String> getTokenMappings(String candidateType, Properties props) {
+        Map<String, String> tokenToColumnMap = new LinkedHashMap<>();
+        int startIndex = "IND".equalsIgnoreCase(candidateType) ? 1 : 11;  // IND starts at 1, ENT at 11
+        for (int i = startIndex; ; i++) {
+            String token = props.getProperty("replace.src[" + i + "]");
+            String column = props.getProperty("replace.targetColumn[" + i + "]");
+            if (token == null || column == null) break;
+            tokenToColumnMap.put(token, column);
+        }
+        return tokenToColumnMap;
+    }
+
+    private static List<RowData> prepareQueryAndGetTableData(Connection connection, Properties props, String tableName, String candidateType, Collection<String> requiredColumns) throws Exception {
         List<RowData> rows = new ArrayList<>();
         String baseFilter = props.getProperty(ConstantsCS.WHERE_CLAUSE, "1=1");
         String filter = " where " + baseFilter;
@@ -222,7 +253,12 @@ public class RawMessageGeneratorCS {
             filter += " AND " + wlFilter;
         }
 
-        String query = "select * from " + tableName + filter;
+        // Build SELECT clause with required columns
+        Set<String> columns = new LinkedHashSet<>(requiredColumns);
+        columns.add("N_UID"); // Always include UID
+        String selectClause = String.join(", ", columns);
+
+        String query = "select " + selectClause + " from " + tableName + filter;
         System.out.println("SQL Query generated:: " + query);
 
         try (PreparedStatement pst = connection.prepareStatement(query);
@@ -242,7 +278,11 @@ public class RawMessageGeneratorCS {
         return rows;
     }
 
-    private static List<RowData> prepareQueryAndGetTableDataForTranslit(Connection connection, Properties props, String tableName, String candidateType) throws Exception {
+    private static List<RowData> prepareQueryAndGetTableData(Connection connection, Properties props, String tableName, String candidateType) throws Exception {
+        return prepareQueryAndGetTableData(connection, props, tableName, candidateType, Arrays.asList("V_FULL_NAME", "V_ENTITY_NAME"));
+    }
+
+    private static List<RowData> prepareQueryAndGetTableDataForTranslit(Connection connection, Properties props, String tableName, String candidateType, Collection<String> requiredColumns) throws Exception {
         List<RowData> rows = new ArrayList<>();
         String filter = " where 1=1";
 
@@ -256,7 +296,12 @@ public class RawMessageGeneratorCS {
             filter += " AND " + wlFilter;
         }
 
-        String query = "select * from " + tableName + filter;
+        // Build SELECT clause with required columns
+        Set<String> columns = new LinkedHashSet<>(requiredColumns);
+        columns.add("N_UID"); // Always include UID
+        String selectClause = String.join(", ", columns);
+
+        String query = "select " + selectClause + " from " + tableName + filter;
         System.out.println("SQL Query for transliteration generated:: " + query);
 
         try (PreparedStatement pst = connection.prepareStatement(query);
@@ -276,73 +321,113 @@ public class RawMessageGeneratorCS {
         return rows;
     }
 
-    private static List<RowData> splitSemicolonNames(List<RowData> rows, String candidateType) {
+    private static List<RowData> prepareQueryAndGetTableDataForTranslit(Connection connection, Properties props, String tableName, String candidateType) throws Exception {
+        return prepareQueryAndGetTableDataForTranslit(connection, props, tableName, candidateType, Arrays.asList("V_FULL_NAME", "V_ENTITY_NAME"));
+    }
+
+    private static List<RowData> splitSemicolonNames(List<RowData> rows, String candidateType, Map<String, String> tokenToColumnMap, String variationToken) {
         List<RowData> splitRows = new ArrayList<>();
-        String nameColumn = "IND".equalsIgnoreCase(candidateType) ? "V_FULL_NAME" : "V_ENTITY_NAME";
+
         for (RowData row : rows) {
-            String fullName = asString(row.get(nameColumn));
-            String[] names = fullName.split(";");
-            for (String name : names) {
-                name = name.trim();
-                if (!name.isEmpty()) {
-                    RowData newRow = new RowData();
-                    for (String key : row.keySet()) {
-                        newRow.put(key, row.get(key));
+            // Get all semicolon-separated values for ALL columns in tokenToColumnMap
+            List<List<String>> allValueLists = new ArrayList<>();
+            List<String> allColumns = new ArrayList<>();
+            for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
+                String column = entry.getValue();
+                allColumns.add(column);
+                String value = asString(row.get(column));
+                List<String> values = new ArrayList<>();
+                for (String part : value.split(";")) {
+                    part = part.trim();
+                    if (!part.isEmpty()) {
+                        values.add(part);
                     }
-                    newRow.put(nameColumn, name);
-                    splitRows.add(newRow);
                 }
+                if (values.isEmpty()) values.add(""); // Ensure at least one empty value
+                allValueLists.add(values);
+            }
+
+            // Generate cartesian product of all column values (including full name)
+            List<List<String>> combinations = generateCombinations(allValueLists);
+
+            for (List<String> combo : combinations) {
+                RowData newRow = new RowData();
+                for (String key : row.keySet()) {
+                    newRow.put(key, row.get(key));
+                }
+
+                // Set ALL columns to their combo values
+                for (int i = 0; i < allColumns.size(); i++) {
+                    newRow.put(allColumns.get(i), combo.get(i));
+                }
+
+                splitRows.add(newRow);
             }
         }
         return splitRows;
     }
 
-private static void generateRawMessagesForRows(List<RowData> rows, Properties props, JSONObject templateJson, String tableName, String tagName, String webserviceId, String candidateType, List<Map<String, Object>> messages, String wlType) {
+private static void generateRawMessagesForRows(List<RowData> rows, Properties props, JSONObject templateJson, String tableName, String tagName, String webserviceId, String candidateType, List<Map<String, Object>> messages, String wlType, Map<String, String> tokenToColumnMap, String variationToken) {
         Set<String> seenMessages = new HashSet<>();
-        String targetColumn = "IND".equalsIgnoreCase(candidateType) ? props.getProperty("indTargetColumn", "V_FULL_NAME") : props.getProperty("entTargetColumn", "V_ENTITY_NAME");
+
         for (RowData row : rows) {
             String uid = asString(row.get("N_UID"));
-            String fullName = asString(row.get("IND".equalsIgnoreCase(candidateType) ? "V_FULL_NAME" : "V_ENTITY_NAME"));
 
+            // Build source and target column strings
+            StringBuilder sourceInputBuilder = new StringBuilder();
+            StringBuilder targetInputBuilder = new StringBuilder();
+            StringBuilder targetColumnBuilder = new StringBuilder();
+            for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
+                String token = entry.getKey();
+                String column = entry.getValue();
+                String value = asString(row.get(column));
+                if (sourceInputBuilder.length() > 0) {
+                    sourceInputBuilder.append(";");
+                    targetInputBuilder.append(";");
+                    targetColumnBuilder.append(";");
+                }
+                sourceInputBuilder.append(value);
+                targetInputBuilder.append(value); // Will be modified for variations on full name
+                targetColumnBuilder.append(column);
+            }
+            String sourceInput = sourceInputBuilder.toString();
+            String targetColumn = targetColumnBuilder.toString();
+
+            String fullName = asString(row.get(tokenToColumnMap.get(variationToken)));
             String field = "IND".equalsIgnoreCase(candidateType) ? "Full Name" : "Organization Name";
 
-            // Generate exact
-            JSONObject jsonExact = new JSONObject(templateJson.toString()); // deep copy
-            JSONObject candidateExact = jsonExact.getJSONObject("requestJson").getJSONArray("Candidate").getJSONObject(0);
-            candidateExact.put(field, fullName);
+            // Generate exact with all tokens replaced
+            JSONObject jsonExact = buildJsonWithAllTokens(templateJson, row, tokenToColumnMap, variationToken, fullName, field);
             String jsonStrExact = jsonExact.toString();
-            addToArray(jsonStrExact, "EXACT", messages, seenMessages, uid, tableName, wlType, fullName, fullName, targetColumn, "EXACT");
+            addToArray(jsonStrExact, "EXACT", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInputBuilder.toString(), targetColumn, "EXACT");
 
             // CED1
             if ("Y".equalsIgnoreCase(props.getProperty("ced1"))) {
                 List<String> variants = generateCedVariants(fullName, 1);
                 for (String var : variants) {
-                    JSONObject jsonObj = new JSONObject(templateJson.toString()); // deep copy
-                    JSONObject candidate = jsonObj.getJSONObject("requestJson").getJSONArray("Candidate").getJSONObject(0);
-                    candidate.put(field, var);
+                    JSONObject jsonObj = buildJsonWithAllTokens(templateJson, row, tokenToColumnMap, variationToken, var, field);
                     String jsonStr = jsonObj.toString();
-                    addToArray(jsonStr, "CED1", messages, seenMessages, uid, tableName, wlType, fullName, var, targetColumn, "CED1");
+                    String targetInput = buildTargetInput(tokenToColumnMap, row, variationToken, var);
+                    addToArray(jsonStr, "CED1", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "CED1");
                 }
             }
             // CED2, CED3 similar
             if ("Y".equalsIgnoreCase(props.getProperty("ced2"))) {
                 List<String> variants = generateCedVariants(fullName, 2);
                 for (String var : variants) {
-                    JSONObject jsonObj = new JSONObject(templateJson.toString()); // deep copy
-                    JSONObject candidate = jsonObj.getJSONObject("requestJson").getJSONArray("Candidate").getJSONObject(0);
-                    candidate.put(field, var);
+                    JSONObject jsonObj = buildJsonWithAllTokens(templateJson, row, tokenToColumnMap, variationToken, var, field);
                     String jsonStr = jsonObj.toString();
-                    addToArray(jsonStr, "CED2", messages, seenMessages, uid, tableName, wlType, fullName, var, targetColumn, "CED2");
+                    String targetInput = buildTargetInput(tokenToColumnMap, row, variationToken, var);
+                    addToArray(jsonStr, "CED2", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "CED2");
                 }
             }
             if ("Y".equalsIgnoreCase(props.getProperty("ced3"))) {
                 List<String> variants = generateCedVariants(fullName, 3);
                 for (String var : variants) {
-                    JSONObject jsonObj = new JSONObject(templateJson.toString()); // deep copy
-                    JSONObject candidate = jsonObj.getJSONObject("requestJson").getJSONArray("Candidate").getJSONObject(0);
-                    candidate.put(field, var);
+                    JSONObject jsonObj = buildJsonWithAllTokens(templateJson, row, tokenToColumnMap, variationToken, var, field);
                     String jsonStr = jsonObj.toString();
-                    addToArray(jsonStr, "CED3", messages, seenMessages, uid, tableName, wlType, fullName, var, targetColumn, "CED3");
+                    String targetInput = buildTargetInput(tokenToColumnMap, row, variationToken, var);
+                    addToArray(jsonStr, "CED3", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "CED3");
                 }
             }
 
@@ -353,31 +438,28 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
                 if ("Y".equalsIgnoreCase(props.getProperty("rep1"))) {
                     List<String> variants = generateRepVariants(fullName, 1);
                     for (String var : variants) {
-                        JSONObject jsonObj = new JSONObject(templateJson.toString()); // deep copy
-                        JSONObject candidate = jsonObj.getJSONObject("requestJson").getJSONArray("Candidate").getJSONObject(0);
-                        candidate.put(field, var);
+                        JSONObject jsonObj = buildJsonWithAllTokens(templateJson, row, tokenToColumnMap, variationToken, var, field);
                         String jsonStr = jsonObj.toString();
-                        addToArray(jsonStr, "REP1", messages, seenMessages, uid, tableName, wlType, fullName, var, targetColumn, "REP1");
+                        String targetInput = buildTargetInput(tokenToColumnMap, row, variationToken, var);
+                        addToArray(jsonStr, "REP1", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "REP1");
                     }
                 }
                 if ("Y".equalsIgnoreCase(props.getProperty("rep2"))) {
                     List<String> variants = generateRepVariants(fullName, 2);
                     for (String var : variants) {
-                        JSONObject jsonObj = new JSONObject(templateJson.toString()); // deep copy
-                        JSONObject candidate = jsonObj.getJSONObject("requestJson").getJSONArray("Candidate").getJSONObject(0);
-                        candidate.put(field, var);
+                        JSONObject jsonObj = buildJsonWithAllTokens(templateJson, row, tokenToColumnMap, variationToken, var, field);
                         String jsonStr = jsonObj.toString();
-                        addToArray(jsonStr, "REP2", messages, seenMessages, uid, tableName, wlType, fullName, var, targetColumn, "REP2");
+                        String targetInput = buildTargetInput(tokenToColumnMap, row, variationToken, var);
+                        addToArray(jsonStr, "REP2", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "REP2");
                     }
                 }
                 if ("Y".equalsIgnoreCase(props.getProperty("rep3"))) {
                     List<String> variants = generateRepVariants(fullName, 3);
                     for (String var : variants) {
-                        JSONObject jsonObj = new JSONObject(templateJson.toString()); // deep copy
-                        JSONObject candidate = jsonObj.getJSONObject("requestJson").getJSONArray("Candidate").getJSONObject(0);
-                        candidate.put(field, var);
+                        JSONObject jsonObj = buildJsonWithAllTokens(templateJson, row, tokenToColumnMap, variationToken, var, field);
                         String jsonStr = jsonObj.toString();
-                        addToArray(jsonStr, "REP3", messages, seenMessages, uid, tableName, wlType, fullName, var, targetColumn, "REP3");
+                        String targetInput = buildTargetInput(tokenToColumnMap, row, variationToken, var);
+                        addToArray(jsonStr, "REP3", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "REP3");
                     }
                 }
             }
@@ -389,11 +471,10 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
                 for (String sw : swList) {
                     List<String> variants = generateStopwordVariants(fullName, sw);
                     for (String var : variants) {
-                        JSONObject jsonObj = new JSONObject(templateJson.toString()); // deep copy
-                        JSONObject candidate = jsonObj.getJSONObject("requestJson").getJSONArray("Candidate").getJSONObject(0);
-                        candidate.put(field, var);
+                        JSONObject jsonObj = buildJsonWithAllTokens(templateJson, row, tokenToColumnMap, variationToken, var, field);
                         String jsonStr = jsonObj.toString();
-                        addToArray(jsonStr, "STOPWORD", messages, seenMessages, uid, tableName, wlType, fullName, var, targetColumn, "STOPWORD");
+                        String targetInput = buildTargetInput(tokenToColumnMap, row, variationToken, var);
+                        addToArray(jsonStr, "STOPWORD", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "STOPWORD");
                     }
                 }
             }
@@ -407,31 +488,87 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
                     System.out.println("No synonym variants generated for " + fullName + ", " + candidateType + " synonymMap has " + synMap.size() + " entries");
                 }
                 for (String var : variants) {
-                    JSONObject jsonObj = new JSONObject(templateJson.toString()); // deep copy
-                    JSONObject candidate = jsonObj.getJSONObject("requestJson").getJSONArray("Candidate").getJSONObject(0);
-                    candidate.put(field, var);
+                    JSONObject jsonObj = buildJsonWithAllTokens(templateJson, row, tokenToColumnMap, variationToken, var, field);
                     String jsonStr = jsonObj.toString();
-                    addToArray(jsonStr, "SYNONYM", messages, seenMessages, uid, tableName, wlType, fullName, var, targetColumn, "SYNONYM");
+                    String targetInput = buildTargetInput(tokenToColumnMap, row, variationToken, var);
+                    addToArray(jsonStr, "SYNONYM", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "SYNONYM");
                 }
             }
         }
     }
 
-    private static void generateTranslitMessagesForRows(List<RowData> rows, Properties props, JSONObject templateJson, String tableName, String tagName, String webserviceId, String candidateType, List<Map<String, Object>> messages, String wlType) {
+    private static void generateTranslitMessagesForRows(List<RowData> rows, Properties props, JSONObject templateJson, String tableName, String tagName, String webserviceId, String candidateType, List<Map<String, Object>> messages, String wlType, Map<String, String> tokenToColumnMap, String variationToken) {
         Set<String> seenMessages = new HashSet<>();
-        String targetColumn = "IND".equalsIgnoreCase(candidateType) ? props.getProperty("indTargetColumn", "V_FULL_NAME") : props.getProperty("entTargetColumn", "V_ENTITY_NAME");
+
         for (RowData row : rows) {
             String uid = asString(row.get("N_UID"));
-            String fullName = asString(row.get("IND".equalsIgnoreCase(candidateType) ? "V_FULL_NAME" : "V_ENTITY_NAME"));
 
+            // Build source and target column strings
+            StringBuilder sourceInputBuilder = new StringBuilder();
+            StringBuilder targetInputBuilder = new StringBuilder();
+            StringBuilder targetColumnBuilder = new StringBuilder();
+            for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
+                String token = entry.getKey();
+                String column = entry.getValue();
+                String value = asString(row.get(column));
+                if (sourceInputBuilder.length() > 0) {
+                    sourceInputBuilder.append(";");
+                    targetInputBuilder.append(";");
+                    targetColumnBuilder.append(";");
+                }
+                sourceInputBuilder.append(value);
+                targetInputBuilder.append(value); // Transliteration doesn't change values
+                targetColumnBuilder.append(column);
+            }
+            String sourceInput = sourceInputBuilder.toString();
+            String targetColumn = targetColumnBuilder.toString();
+
+            String fullName = asString(row.get(tokenToColumnMap.get(variationToken)));
             String field = "IND".equalsIgnoreCase(candidateType) ? "Full Name" : "Organization Name";
 
-            JSONObject json = new JSONObject(templateJson.toString()); // deep copy
-            JSONObject candidate = json.getJSONObject("requestJson").getJSONArray("Candidate").getJSONObject(0);
-            candidate.put(field, fullName);
+            JSONObject json = buildJsonWithAllTokens(templateJson, row, tokenToColumnMap, variationToken, fullName, field);
             String jsonStr = json.toString();
-            addToArray(jsonStr, "TRANSLIT", messages, seenMessages, uid, tableName, wlType, fullName, fullName, targetColumn, "TRANSLIT");
+            addToArray(jsonStr, "TRANSLIT", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInputBuilder.toString(), targetColumn, "TRANSLIT");
         }
+    }
+
+    private static JSONObject buildJsonWithAllTokens(JSONObject templateJson, RowData row, Map<String, String> tokenToColumnMap, String variationToken, String variationValue, String variationField) {
+        JSONObject jsonObj = new JSONObject(templateJson.toString()); // deep copy
+        JSONObject candidate = jsonObj.getJSONObject("requestJson").getJSONArray("Candidate").getJSONObject(0);
+
+        // Replace all tokens with their values from the row
+        for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
+            String token = entry.getKey();
+            String column = entry.getValue();
+            String value = asString(row.get(column));
+
+            if (token.equals(variationToken)) {
+                // Use the provided variation value for the variation token
+                candidate.put(variationField, variationValue);
+            } else {
+                // Replace token in JSON with the value
+                String jsonStr = jsonObj.toString();
+                jsonStr = jsonStr.replace(token, value);
+                jsonObj = new JSONObject(jsonStr);
+                candidate = jsonObj.getJSONObject("requestJson").getJSONArray("Candidate").getJSONObject(0);
+            }
+        }
+
+        return jsonObj;
+    }
+
+    private static String buildTargetInput(Map<String, String> tokenToColumnMap, RowData row, String variationToken, String variationValue) {
+        StringBuilder targetInputBuilder = new StringBuilder();
+        for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
+            String token = entry.getKey();
+            String column = entry.getValue();
+            String value = token.equals(variationToken) ? variationValue : asString(row.get(column));
+            if (targetInputBuilder.length() > 0) {
+                targetInputBuilder.append(";");
+            }
+            targetInputBuilder.append(value);
+        }
+        return targetInputBuilder.toString();
     }
 
 private static String buildJson(String template, String name, String candidateType, String uid, String tableName, String wlType) {
