@@ -179,4 +179,10 @@ public class ConstantsCS {
 
     // CED random replace flag
     public static String CED_RANDOM = "cedRandom";
+
+    // Variation token configuration
+    public static String VARIATION_TOKEN_IND = "variationtoken.ind";
+    public static String VARIATION_TOKEN_ENT = "variationtoken.ent";
+    public static String COMBINE_VARIATIONS_IND = "combinevariations.ind";
+    public static String COMBINE_VARIATIONS_ENT = "combinevariations.ent";
 }

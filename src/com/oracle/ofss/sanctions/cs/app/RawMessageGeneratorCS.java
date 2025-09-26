@@ -198,12 +198,22 @@ public class RawMessageGeneratorCS {
             }
         }
 
-        String variationToken = "IND".equalsIgnoreCase(type) ? "__FULL_NAME__" : "__ORG_NAME__";
-        if (!filteredTokenToColumnMap.containsKey(variationToken)) {
-            System.err.println("Variation token " + variationToken + " not found in template - skipping processing for " + type);
-            return;
+        String defaultVariationToken = "IND".equalsIgnoreCase(type) ? "__FULL_NAME__" : "__ORG_NAME__";
+        String variationTokenConfig = props.getProperty("variationtoken." + type.toLowerCase(), defaultVariationToken);
+        String[] variationTokenArray = variationTokenConfig.split(";");
+        List<String> validVariationTokens = new ArrayList<>();
+        for (String vt : variationTokenArray) {
+            vt = vt.trim();
+            if (filteredTokenToColumnMap.containsKey(vt)) {
+                validVariationTokens.add(vt);
+            } else {
+                System.err.println("Variation token " + vt + " not found in filtered map for " + type + " - skipping this token");
+            }
         }
-        String variationColumn = filteredTokenToColumnMap.get(variationToken);
+        if (validVariationTokens.isEmpty()) {
+            System.err.println("No valid variation tokens found for " + type + " - generating exact messages only, skipping variations");
+        }
+        String combineVariations = props.getProperty("combinevariations." + type.toLowerCase(), "N");
 
         for (String wlType : watchlistTypes) {
             wlType = wlType.trim();
@@ -213,15 +223,15 @@ public class RawMessageGeneratorCS {
             if (tableName == null) continue;
 
             List<RowData> rows = prepareQueryAndGetTableData(connection, props, tableName, type, filteredTokenToColumnMap.values());
-            List<RowData> splitRows = splitSemicolonNames(rows, type, filteredTokenToColumnMap, variationToken);
+            List<RowData> splitRows = splitSemicolonNames(rows, type, filteredTokenToColumnMap);
 
-            generateRawMessagesForRows(splitRows, props, templateJson, tableName, tagName, webserviceId, type, messages, wlType, filteredTokenToColumnMap, variationToken);
+            generateRawMessagesForRows(splitRows, props, templateJson, tableName, tagName, webserviceId, type, messages, wlType, filteredTokenToColumnMap, validVariationTokens, combineVariations);
 
             // Transliteration: select non-English rows and generate messages
             if ("Y".equalsIgnoreCase(props.getProperty("enableTransliteration"))) {
                 List<RowData> translitRows = prepareQueryAndGetTableDataForTranslit(connection, props, tableName, type, filteredTokenToColumnMap.values());
-                List<RowData> translitSplitRows = splitSemicolonNames(translitRows, type, filteredTokenToColumnMap, variationToken);
-                generateTranslitMessagesForRows(translitSplitRows, props, templateJson, tableName, tagName, webserviceId, type, messages, wlType, filteredTokenToColumnMap, variationToken);
+                List<RowData> translitSplitRows = splitSemicolonNames(translitRows, type, filteredTokenToColumnMap);
+                generateTranslitMessagesForRows(translitSplitRows, props, templateJson, tableName, tagName, webserviceId, type, messages, wlType, filteredTokenToColumnMap, validVariationTokens, combineVariations);
             }
         }
     }
@@ -325,7 +335,7 @@ public class RawMessageGeneratorCS {
         return prepareQueryAndGetTableDataForTranslit(connection, props, tableName, candidateType, Arrays.asList("V_FULL_NAME", "V_ENTITY_NAME"));
     }
 
-    private static List<RowData> splitSemicolonNames(List<RowData> rows, String candidateType, Map<String, String> tokenToColumnMap, String variationToken) {
+    private static List<RowData> splitSemicolonNames(List<RowData> rows, String candidateType, Map<String, String> tokenToColumnMap) {
         List<RowData> splitRows = new ArrayList<>();
 
         for (RowData row : rows) {
@@ -367,7 +377,7 @@ public class RawMessageGeneratorCS {
         return splitRows;
     }
 
-private static void generateRawMessagesForRows(List<RowData> rows, Properties props, JSONObject templateJson, String tableName, String tagName, String webserviceId, String candidateType, List<Map<String, Object>> messages, String wlType, Map<String, String> tokenToColumnMap, String variationToken) {
+private static void generateRawMessagesForRows(List<RowData> rows, Properties props, JSONObject templateJson, String tableName, String tagName, String webserviceId, String candidateType, List<Map<String, Object>> messages, String wlType, Map<String, String> tokenToColumnMap, List<String> validVariationTokens, String combineVariations) {
         Set<String> seenMessages = new HashSet<>();
 
         for (RowData row : rows) {
@@ -375,129 +385,203 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
 
             // Build source and target column strings
             StringBuilder sourceInputBuilder = new StringBuilder();
-            StringBuilder targetInputBuilder = new StringBuilder();
             StringBuilder targetColumnBuilder = new StringBuilder();
             for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
-                String token = entry.getKey();
                 String column = entry.getValue();
                 String value = asString(row.get(column));
                 if (sourceInputBuilder.length() > 0) {
                     sourceInputBuilder.append(";");
-                    targetInputBuilder.append(";");
                     targetColumnBuilder.append(";");
                 }
                 sourceInputBuilder.append(value);
-                targetInputBuilder.append(value); // Will be modified for variations on full name
                 targetColumnBuilder.append(column);
             }
             String sourceInput = sourceInputBuilder.toString();
             String targetColumn = targetColumnBuilder.toString();
 
-            String fullName = asString(row.get(tokenToColumnMap.get(variationToken)));
-            String field = "IND".equalsIgnoreCase(candidateType) ? "Full Name" : "Organization Name";
-
             // Generate exact with all tokens replaced
-            JSONObject jsonExact = buildJsonWithAllTokens(templateJson, row, tokenToColumnMap, variationToken, fullName, field);
+            Map<String, String> exactTokenToValue = new HashMap<>();
+            for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
+                exactTokenToValue.put(entry.getKey(), asString(row.get(entry.getValue())));
+            }
+            JSONObject jsonExact = buildJsonWithAllTokens(templateJson, exactTokenToValue);
             String jsonStrExact = jsonExact.toString();
-            addToArray(jsonStrExact, "EXACT", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInputBuilder.toString(), targetColumn, "EXACT");
+            String targetInputExact = buildTargetInput(tokenToColumnMap, exactTokenToValue);
+            addToArray(jsonStrExact, "EXACT", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInputExact, targetColumn, "EXACT");
 
-            // CED1
-            if ("Y".equalsIgnoreCase(props.getProperty("ced1"))) {
-                List<String> variants = generateCedVariants(fullName, 1);
-                for (String var : variants) {
-                    JSONObject jsonObj = buildJsonWithAllTokens(templateJson, row, tokenToColumnMap, variationToken, var, field);
-                    String jsonStr = jsonObj.toString();
-                    String targetInput = buildTargetInput(tokenToColumnMap, row, variationToken, var);
-                    addToArray(jsonStr, "CED1", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "CED1");
-                }
+            // Generate variations
+            if (!validVariationTokens.isEmpty()) {
+                generateVariationsForRow(row, props, templateJson, tableName, tagName, webserviceId, candidateType, messages, wlType, tokenToColumnMap, validVariationTokens, combineVariations, sourceInput, targetColumn, seenMessages, uid);
             }
-            // CED2, CED3 similar
-            if ("Y".equalsIgnoreCase(props.getProperty("ced2"))) {
-                List<String> variants = generateCedVariants(fullName, 2);
-                for (String var : variants) {
-                    JSONObject jsonObj = buildJsonWithAllTokens(templateJson, row, tokenToColumnMap, variationToken, var, field);
-                    String jsonStr = jsonObj.toString();
-                    String targetInput = buildTargetInput(tokenToColumnMap, row, variationToken, var);
-                    addToArray(jsonStr, "CED2", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "CED2");
-                }
-            }
-            if ("Y".equalsIgnoreCase(props.getProperty("ced3"))) {
-                List<String> variants = generateCedVariants(fullName, 3);
-                for (String var : variants) {
-                    JSONObject jsonObj = buildJsonWithAllTokens(templateJson, row, tokenToColumnMap, variationToken, var, field);
-                    String jsonStr = jsonObj.toString();
-                    String targetInput = buildTargetInput(tokenToColumnMap, row, variationToken, var);
-                    addToArray(jsonStr, "CED3", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "CED3");
-                }
-            }
+        }
+    }
 
-            // REP1, REP2, REP3
-            if ("Y".equalsIgnoreCase(props.getProperty("rep1")) ||
-                "Y".equalsIgnoreCase(props.getProperty("rep2")) ||
-                "Y".equalsIgnoreCase(props.getProperty("rep3"))) {
-                if ("Y".equalsIgnoreCase(props.getProperty("rep1"))) {
-                    List<String> variants = generateRepVariants(fullName, 1);
-                    for (String var : variants) {
-                        JSONObject jsonObj = buildJsonWithAllTokens(templateJson, row, tokenToColumnMap, variationToken, var, field);
-                        String jsonStr = jsonObj.toString();
-                        String targetInput = buildTargetInput(tokenToColumnMap, row, variationToken, var);
-                        addToArray(jsonStr, "REP1", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "REP1");
-                    }
-                }
-                if ("Y".equalsIgnoreCase(props.getProperty("rep2"))) {
-                    List<String> variants = generateRepVariants(fullName, 2);
-                    for (String var : variants) {
-                        JSONObject jsonObj = buildJsonWithAllTokens(templateJson, row, tokenToColumnMap, variationToken, var, field);
-                        String jsonStr = jsonObj.toString();
-                        String targetInput = buildTargetInput(tokenToColumnMap, row, variationToken, var);
-                        addToArray(jsonStr, "REP2", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "REP2");
-                    }
-                }
-                if ("Y".equalsIgnoreCase(props.getProperty("rep3"))) {
-                    List<String> variants = generateRepVariants(fullName, 3);
-                    for (String var : variants) {
-                        JSONObject jsonObj = buildJsonWithAllTokens(templateJson, row, tokenToColumnMap, variationToken, var, field);
-                        String jsonStr = jsonObj.toString();
-                        String targetInput = buildTargetInput(tokenToColumnMap, row, variationToken, var);
-                        addToArray(jsonStr, "REP3", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "REP3");
+    private static void generateVariationsForRow(RowData row, Properties props, JSONObject templateJson, String tableName, String tagName, String webserviceId, String candidateType, List<Map<String, Object>> messages, String wlType, Map<String, String> tokenToColumnMap, List<String> validVariationTokens, String combineVariations, String sourceInput, String targetColumn, Set<String> seenMessages, String uid) {
+        // Generate variations for CED1, CED2, CED3, REP1, REP2, REP3, STOPWORD, SYNONYM
+        String[] variationTypes = {"ced1", "ced2", "ced3", "rep1", "rep2", "rep3"};
+        boolean enableStopword = "Y".equalsIgnoreCase(props.getProperty("enableIndStopword")) || "Y".equalsIgnoreCase(props.getProperty("enableEntStopword"));
+        boolean enableSynonym = "Y".equalsIgnoreCase(props.getProperty("enableSynonym"));
+
+        if (combineVariations.equals("N")) {
+            // Independent variations: for each variation type, for each token, generate variants
+            for (String variationType : variationTypes) {
+                if ("Y".equalsIgnoreCase(props.getProperty(variationType))) {
+                    for (String variationToken : validVariationTokens) {
+                        String baseValue = asString(row.get(tokenToColumnMap.get(variationToken)));
+                        List<String> variants = generateVariantsForType(variationType, baseValue, candidateType);
+                        for (String variant : variants) {
+                            Map<String, String> tokenToVariant = new HashMap<>();
+                            for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
+                                tokenToVariant.put(entry.getKey(), entry.getKey().equals(variationToken) ? variant : asString(row.get(entry.getValue())));
+                            }
+                            JSONObject jsonObj = buildJsonWithAllTokens(templateJson, tokenToVariant);
+                            String jsonStr = jsonObj.toString();
+                            String targetInput = buildTargetInput(tokenToColumnMap, tokenToVariant);
+                            addToArray(jsonStr, variationType.toUpperCase(), messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, variationType.toUpperCase());
+                        }
                     }
                 }
             }
 
-            // Stopwords
-            String stopwordEnable = "IND".equalsIgnoreCase(candidateType) ? "enableIndStopword" : "enableEntStopword";
-            if ("Y".equalsIgnoreCase(props.getProperty(stopwordEnable))) {
+            // Stopword variations
+            if (enableStopword) {
                 List<String> swList = "IND".equalsIgnoreCase(candidateType) ? indStopwordList : entStopwordList;
                 for (String sw : swList) {
-                    List<String> variants = generateStopwordVariants(fullName, sw);
-                    for (String var : variants) {
-                        JSONObject jsonObj = buildJsonWithAllTokens(templateJson, row, tokenToColumnMap, variationToken, var, field);
+                    for (String variationToken : validVariationTokens) {
+                        String baseValue = asString(row.get(tokenToColumnMap.get(variationToken)));
+                        List<String> variants = generateStopwordVariants(baseValue, sw);
+                        for (String variant : variants) {
+                            Map<String, String> tokenToVariant = new HashMap<>();
+                            for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
+                                tokenToVariant.put(entry.getKey(), entry.getKey().equals(variationToken) ? variant : asString(row.get(entry.getValue())));
+                            }
+                            JSONObject jsonObj = buildJsonWithAllTokens(templateJson, tokenToVariant);
+                            String jsonStr = jsonObj.toString();
+                            String targetInput = buildTargetInput(tokenToColumnMap, tokenToVariant);
+                            addToArray(jsonStr, "STOPWORD", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "STOPWORD");
+                        }
+                    }
+                }
+            }
+
+            // Synonym variations
+            if (enableSynonym) {
+                Map<String, List<String>> synMap = "IND".equalsIgnoreCase(candidateType) ? indSynonymMap : entSynonymMap;
+                for (String variationToken : validVariationTokens) {
+                    String baseValue = asString(row.get(tokenToColumnMap.get(variationToken)));
+                    List<String> variants = generateSynonymVariants(baseValue, synMap);
+                    for (String variant : variants) {
+                        Map<String, String> tokenToVariant = new HashMap<>();
+                        for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
+                            tokenToVariant.put(entry.getKey(), entry.getKey().equals(variationToken) ? variant : asString(row.get(entry.getValue())));
+                        }
+                        JSONObject jsonObj = buildJsonWithAllTokens(templateJson, tokenToVariant);
                         String jsonStr = jsonObj.toString();
-                        String targetInput = buildTargetInput(tokenToColumnMap, row, variationToken, var);
+                        String targetInput = buildTargetInput(tokenToColumnMap, tokenToVariant);
+                        addToArray(jsonStr, "SYNONYM", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "SYNONYM");
+                    }
+                }
+            }
+        } else {
+            // Combined variations: for each variation type, generate cartesian product of variants across all tokens
+            for (String variationType : variationTypes) {
+                if ("Y".equalsIgnoreCase(props.getProperty(variationType))) {
+                    List<List<String>> allVariantsLists = new ArrayList<>();
+                    for (String variationToken : validVariationTokens) {
+                        String baseValue = asString(row.get(tokenToColumnMap.get(variationToken)));
+                        List<String> variants = generateVariantsForType(variationType, baseValue, candidateType);
+                        allVariantsLists.add(variants);
+                    }
+                    List<List<String>> variantCombos = generateCombinations(allVariantsLists);
+                    for (List<String> combo : variantCombos) {
+                        Map<String, String> tokenToVariant = new HashMap<>();
+                        for (int i = 0; i < validVariationTokens.size(); i++) {
+                            tokenToVariant.put(validVariationTokens.get(i), combo.get(i));
+                        }
+                        for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
+                            if (!validVariationTokens.contains(entry.getKey())) {
+                                tokenToVariant.put(entry.getKey(), asString(row.get(entry.getValue())));
+                            }
+                        }
+                        JSONObject jsonObj = buildJsonWithAllTokens(templateJson, tokenToVariant);
+                        String jsonStr = jsonObj.toString();
+                        String targetInput = buildTargetInput(tokenToColumnMap, tokenToVariant);
+                        addToArray(jsonStr, variationType.toUpperCase(), messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, variationType.toUpperCase());
+                    }
+                }
+            }
+
+            // Combined stopwords
+            if (enableStopword) {
+                List<String> swList = "IND".equalsIgnoreCase(candidateType) ? indStopwordList : entStopwordList;
+                for (String sw : swList) {
+                    List<List<String>> allVariantsLists = new ArrayList<>();
+                    for (String variationToken : validVariationTokens) {
+                        String baseValue = asString(row.get(tokenToColumnMap.get(variationToken)));
+                        List<String> variants = generateStopwordVariants(baseValue, sw);
+                        allVariantsLists.add(variants);
+                    }
+                    List<List<String>> variantCombos = generateCombinations(allVariantsLists);
+                    for (List<String> combo : variantCombos) {
+                        Map<String, String> tokenToVariant = new HashMap<>();
+                        for (int i = 0; i < validVariationTokens.size(); i++) {
+                            tokenToVariant.put(validVariationTokens.get(i), combo.get(i));
+                        }
+                        for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
+                            if (!validVariationTokens.contains(entry.getKey())) {
+                                tokenToVariant.put(entry.getKey(), asString(row.get(entry.getValue())));
+                            }
+                        }
+                        JSONObject jsonObj = buildJsonWithAllTokens(templateJson, tokenToVariant);
+                        String jsonStr = jsonObj.toString();
+                        String targetInput = buildTargetInput(tokenToColumnMap, tokenToVariant);
                         addToArray(jsonStr, "STOPWORD", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "STOPWORD");
                     }
                 }
             }
 
-            // Synonyms
-            if ("Y".equalsIgnoreCase(props.getProperty("enableSynonym"))) {
+            // Combined synonyms
+            if (enableSynonym) {
                 Map<String, List<String>> synMap = "IND".equalsIgnoreCase(candidateType) ? indSynonymMap : entSynonymMap;
-                List<String> variants = generateSynonymVariants(fullName, synMap);
-                System.out.println("Generated " + variants.size() + " synonym variants for '" + fullName + "' using " + candidateType + " map");
-                if (variants.isEmpty()) {
-                    System.out.println("No synonym variants generated for " + fullName + ", " + candidateType + " synonymMap has " + synMap.size() + " entries");
+                List<List<String>> allVariantsLists = new ArrayList<>();
+                for (String variationToken : validVariationTokens) {
+                    String baseValue = asString(row.get(tokenToColumnMap.get(variationToken)));
+                    List<String> variants = generateSynonymVariants(baseValue, synMap);
+                    allVariantsLists.add(variants);
                 }
-                for (String var : variants) {
-                    JSONObject jsonObj = buildJsonWithAllTokens(templateJson, row, tokenToColumnMap, variationToken, var, field);
+                List<List<String>> variantCombos = generateCombinations(allVariantsLists);
+                for (List<String> combo : variantCombos) {
+                    Map<String, String> tokenToVariant = new HashMap<>();
+                    for (int i = 0; i < validVariationTokens.size(); i++) {
+                        tokenToVariant.put(validVariationTokens.get(i), combo.get(i));
+                    }
+                    for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
+                        if (!validVariationTokens.contains(entry.getKey())) {
+                            tokenToVariant.put(entry.getKey(), asString(row.get(entry.getValue())));
+                        }
+                    }
+                    JSONObject jsonObj = buildJsonWithAllTokens(templateJson, tokenToVariant);
                     String jsonStr = jsonObj.toString();
-                    String targetInput = buildTargetInput(tokenToColumnMap, row, variationToken, var);
+                    String targetInput = buildTargetInput(tokenToColumnMap, tokenToVariant);
                     addToArray(jsonStr, "SYNONYM", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "SYNONYM");
                 }
             }
         }
     }
 
-    private static void generateTranslitMessagesForRows(List<RowData> rows, Properties props, JSONObject templateJson, String tableName, String tagName, String webserviceId, String candidateType, List<Map<String, Object>> messages, String wlType, Map<String, String> tokenToColumnMap, String variationToken) {
+    private static List<String> generateVariantsForType(String variationType, String baseValue, String candidateType) {
+        switch (variationType) {
+            case "ced1": return generateCedVariants(baseValue, 1);
+            case "ced2": return generateCedVariants(baseValue, 2);
+            case "ced3": return generateCedVariants(baseValue, 3);
+            case "rep1": return generateRepVariants(baseValue, 1);
+            case "rep2": return generateRepVariants(baseValue, 2);
+            case "rep3": return generateRepVariants(baseValue, 3);
+            default: return new ArrayList<>();
+        }
+    }
+
+    private static void generateTranslitMessagesForRows(List<RowData> rows, Properties props, JSONObject templateJson, String tableName, String tagName, String webserviceId, String candidateType, List<Map<String, Object>> messages, String wlType, Map<String, String> tokenToColumnMap, List<String> validVariationTokens, String combineVariations) {
         Set<String> seenMessages = new HashSet<>();
 
         for (RowData row : rows) {
@@ -523,46 +607,51 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
             String sourceInput = sourceInputBuilder.toString();
             String targetColumn = targetColumnBuilder.toString();
 
-            String fullName = asString(row.get(tokenToColumnMap.get(variationToken)));
-            String field = "IND".equalsIgnoreCase(candidateType) ? "Full Name" : "Organization Name";
-
-            JSONObject json = buildJsonWithAllTokens(templateJson, row, tokenToColumnMap, variationToken, fullName, field);
+            // Generate translit with all tokens replaced
+            Map<String, String> tokenToValue = new HashMap<>();
+            for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
+                tokenToValue.put(entry.getKey(), asString(row.get(entry.getValue())));
+            }
+            JSONObject json = buildJsonWithAllTokens(templateJson, tokenToValue);
             String jsonStr = json.toString();
             addToArray(jsonStr, "TRANSLIT", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInputBuilder.toString(), targetColumn, "TRANSLIT");
         }
     }
 
-    private static JSONObject buildJsonWithAllTokens(JSONObject templateJson, RowData row, Map<String, String> tokenToColumnMap, String variationToken, String variationValue, String variationField) {
+    private static JSONObject buildJsonWithAllTokens(JSONObject templateJson, Map<String, String> tokenToVariantValue) {
         JSONObject jsonObj = new JSONObject(templateJson.toString()); // deep copy
         JSONObject candidate = jsonObj.getJSONObject("requestJson").getJSONArray("Candidate").getJSONObject(0);
 
-        // Replace all tokens with their values from the row
-        for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
+        // Replace all tokens with their values
+        for (Map.Entry<String, String> entry : tokenToVariantValue.entrySet()) {
             String token = entry.getKey();
-            String column = entry.getValue();
-            String value = asString(row.get(column));
+            String value = entry.getValue();
 
-            if (token.equals(variationToken)) {
-                // Use the provided variation value for the variation token
-                candidate.put(variationField, variationValue);
-            } else {
-                // Replace token in JSON with the value
-                String jsonStr = jsonObj.toString();
-                jsonStr = jsonStr.replace(token, value);
-                jsonObj = new JSONObject(jsonStr);
-                candidate = jsonObj.getJSONObject("requestJson").getJSONArray("Candidate").getJSONObject(0);
-            }
+            // Determine the JSON field for the token
+            String field = getJsonFieldForToken(token);
+            candidate.put(field, value);
         }
 
         return jsonObj;
     }
 
-    private static String buildTargetInput(Map<String, String> tokenToColumnMap, RowData row, String variationToken, String variationValue) {
+    private static String getJsonFieldForToken(String token) {
+        switch (token) {
+            case "__FULL_NAME__": return "Full Name";
+            case "__ORG_NAME__": return "Organization Name";
+            case "__FIRST_NAME__": return "First Name";
+            case "__LAST_NAME__": return "Last Name";
+            case "__DATE_OF_BIRTHS__": return "Date Of Birth";
+            // Add more as needed
+            default: return "Full Name"; // fallback
+        }
+    }
+
+    private static String buildTargetInput(Map<String, String> tokenToColumnMap, Map<String, String> tokenToVariantValue) {
         StringBuilder targetInputBuilder = new StringBuilder();
         for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
             String token = entry.getKey();
-            String column = entry.getValue();
-            String value = token.equals(variationToken) ? variationValue : asString(row.get(column));
+            String value = tokenToVariantValue.get(token);
             if (targetInputBuilder.length() > 0) {
                 targetInputBuilder.append(";");
             }
