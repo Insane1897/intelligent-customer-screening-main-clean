@@ -665,7 +665,18 @@ public class MessageResponseAnalyzerCS {
             System.out.println("Debug checkMatch: No expectedIndex for engine=" + engine + ", watchlist=" + watchlist);
             return false;
         }
-        System.out.println("Debug checkMatch: watchlist=" + watchlist + ", n_uid=" + n_uid + ", targetColumn=" + targetColumn + ", engine=" + engine + ", expectedIndex=" + expectedIndex);
+
+        // Split target columns into a set
+        java.util.Set<String> requiredColumns = new java.util.HashSet<>();
+        if (targetColumn != null && !targetColumn.isEmpty()) {
+            String[] columns = targetColumn.split(";");
+            for (String col : columns) {
+                requiredColumns.add(col.trim().toUpperCase());
+            }
+        }
+        if (requiredColumns.isEmpty()) return true; // No columns to check, treat as Pass
+
+        System.out.println("Debug checkMatch: watchlist=" + watchlist + ", n_uid=" + n_uid + ", targetColumns=" + requiredColumns + ", engine=" + engine + ", expectedIndex=" + expectedIndex);
         try {
             org.json.JSONObject obj = new org.json.JSONObject(resultJson);
             java.util.Iterator<String> keys = obj.keys();
@@ -678,19 +689,26 @@ public class MessageResponseAnalyzerCS {
                         org.json.JSONObject match = matches.getJSONObject(i);
                         String indexName = match.optString("indexName", "");
                         String matchNuid = match.optString("n_uid", "");
+
+                        // Filter by N_UID and indexName first
+                        if (!n_uid.equals(matchNuid) || !expectedIndex.equals(indexName)) {
+                            continue;
+                        }
+
+                        // Check matchedCols and remove from required set
                         org.json.JSONArray matchedCols = match.optJSONArray("matchedCols");
-                        boolean contains = false;
                         if (matchedCols != null) {
                             for (int k = 0; k < matchedCols.length(); k++) {
-                                if (targetColumn.equalsIgnoreCase(matchedCols.getString(k))) {
-                                    contains = true;
-                                    break;
-                                }
+                                String matchedCol = matchedCols.getString(k).toUpperCase();
+                                requiredColumns.remove(matchedCol);
                             }
                         }
-                        System.out.println("Checking match object: indexName=" + indexName + ", matchNuid=" + matchNuid + ", matchedCols=" + (matchedCols != null ? matchedCols.toString() : "null") + ", contains=" + contains);
-                        if (expectedIndex.equals(indexName) && n_uid.equals(matchNuid) && contains) {
-                            System.out.println("Match found for " + watchlist + " in " + engine);
+
+                        System.out.println("Processed match: remaining columns=" + requiredColumns);
+
+                        // Early exit if all columns are covered
+                        if (requiredColumns.isEmpty()) {
+                            System.out.println("All columns matched for " + watchlist + " in " + engine);
                             return true;
                         }
                     }
@@ -698,8 +716,9 @@ public class MessageResponseAnalyzerCS {
             }
         } catch (Exception e) {
             System.err.println("Error checking match: " + e.getMessage());
+            return false;
         }
-        System.out.println("No match found for " + watchlist + " in " + engine);
+        System.out.println("Not all columns matched for " + watchlist + " in " + engine + "; remaining=" + requiredColumns);
         return false;
     }
 
