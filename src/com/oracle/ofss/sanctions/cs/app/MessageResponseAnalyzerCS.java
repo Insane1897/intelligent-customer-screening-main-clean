@@ -1,5 +1,6 @@
 package com.oracle.ofss.sanctions.cs.app;
 
+import org.apache.poi.openxml4j.util.ZipSecureFile;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -10,6 +11,8 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Properties;
 
 public class MessageResponseAnalyzerCS {
@@ -20,6 +23,7 @@ public class MessageResponseAnalyzerCS {
             props.load(reader);
         }
 
+        ZipSecureFile.setMinInflateRatio(0.001);
         try (FileInputStream fis = new FileInputStream(ConstantsCS.OUTPUT_XLSX_FILE_PATH);
              Workbook workbook = new XSSFWorkbook(fis)) {
 
@@ -255,114 +259,50 @@ public class MessageResponseAnalyzerCS {
                     }
                 }
 
-                // Add new columns for categorized match counts, based on toggle
+                // Find existing categorized match columns (added by performAnalysis)
                 int osSanMatchCol = -1, osPepMatchCol = -1, osEddMatchCol = -1, osPrbMatchCol = -1;
                 int otSanMatchCol = -1, otPepMatchCol = -1, otEddMatchCol = -1, otPrbMatchCol = -1;
 
-                String[] newHeaders;
-                int[] newColIndices;
-
-                if ("Y".equalsIgnoreCase(toggle)) {
-                    // Add all OS and OT categorized
-                    osSanMatchCol = nextColIndex++;
-                    osPepMatchCol = nextColIndex++;
-                    osEddMatchCol = nextColIndex++;
-                    osPrbMatchCol = nextColIndex++;
-                    otSanMatchCol = nextColIndex++;
-                    otPepMatchCol = nextColIndex++;
-                    otEddMatchCol = nextColIndex++;
-                    otPrbMatchCol = nextColIndex++;
-                    newHeaders = new String[]{"OS_SAN_MATCH", "OS_PEP_MATCH", "OS_EDD_MATCH", "OS_PRB_MATCH",
-                                              "OT_SAN_MATCH", "OT_PEP_MATCH", "OT_EDD_MATCH", "OT_PRB_MATCH"};
-                    newColIndices = new int[]{osSanMatchCol, osPepMatchCol, osEddMatchCol, osPrbMatchCol,
-                                              otSanMatchCol, otPepMatchCol, otEddMatchCol, otPrbMatchCol};
-                } else {
-                    // Add only current engine's categorized
-                    if ("OS".equalsIgnoreCase(currentEngine)) {
-                        osSanMatchCol = nextColIndex++;
-                        osPepMatchCol = nextColIndex++;
-                        osEddMatchCol = nextColIndex++;
-                        osPrbMatchCol = nextColIndex++;
-                        newHeaders = new String[]{"OS_SAN_MATCH", "OS_PEP_MATCH", "OS_EDD_MATCH", "OS_PRB_MATCH"};
-                        newColIndices = new int[]{osSanMatchCol, osPepMatchCol, osEddMatchCol, osPrbMatchCol};
-                    } else {
-                        otSanMatchCol = nextColIndex++;
-                        otPepMatchCol = nextColIndex++;
-                        otEddMatchCol = nextColIndex++;
-                        otPrbMatchCol = nextColIndex++;
-                        newHeaders = new String[]{"OT_SAN_MATCH", "OT_PEP_MATCH", "OT_EDD_MATCH", "OT_PRB_MATCH"};
-                        newColIndices = new int[]{otSanMatchCol, otPepMatchCol, otEddMatchCol, otPrbMatchCol};
-                    }
+                for (int i = 0; i < headerRow.getLastCellNum(); i++) {
+                    String header = headerRow.getCell(i).getStringCellValue();
+                    if ("OS_SAN_MATCH".equals(header)) osSanMatchCol = i;
+                    else if ("OS_PEP_MATCH".equals(header)) osPepMatchCol = i;
+                    else if ("OS_EDD_MATCH".equals(header)) osEddMatchCol = i;
+                    else if ("OS_PRB_MATCH".equals(header)) osPrbMatchCol = i;
+                    else if ("OT_SAN_MATCH".equals(header)) otSanMatchCol = i;
+                    else if ("OT_PEP_MATCH".equals(header)) otPepMatchCol = i;
+                    else if ("OT_EDD_MATCH".equals(header)) otEddMatchCol = i;
+                    else if ("OT_PRB_MATCH".equals(header)) otPrbMatchCol = i;
                 }
 
-                for (int i = 0; i < newHeaders.length; i++) {
-                    org.apache.poi.ss.usermodel.Cell headerCell = headerRow.createCell(newColIndices[i]);
-                    headerCell.setCellValue(newHeaders[i]);
-                    if (headerRow.getCell(0) != null && headerRow.getCell(0).getCellStyle() != null) {
-                        headerCell.setCellStyle(headerRow.getCell(0).getCellStyle());
-                    }
-                }
+                // Add new columns for OS/OT comparison
+                int commonCol = nextColIndex++;
+                int missingCol = nextColIndex++;
+                int additionalCol = nextColIndex++;
+                int finalStatusCol = nextColIndex++;
 
-                // Add new columns for comparison
-                int comparisonCol = nextColIndex++;
-                int diffPercentCol = nextColIndex++;
-                int summaryCol = nextColIndex++;
-
-                // Set headers for new columns with preserved styling
-                org.apache.poi.ss.usermodel.Cell comparisonHeader = headerRow.createCell(comparisonCol);
-                comparisonHeader.setCellValue("Comparison");
-                // Copy header style if available
+                org.apache.poi.ss.usermodel.Cell commonHeader = headerRow.createCell(commonCol);
+                commonHeader.setCellValue("Common Matches");
                 if (headerRow.getCell(0) != null && headerRow.getCell(0).getCellStyle() != null) {
-                    comparisonHeader.setCellStyle(headerRow.getCell(0).getCellStyle());
+                    commonHeader.setCellStyle(headerRow.getCell(0).getCellStyle());
                 }
 
-                org.apache.poi.ss.usermodel.Cell diffHeader = headerRow.createCell(diffPercentCol);
-                diffHeader.setCellValue("Difference%");
+                org.apache.poi.ss.usermodel.Cell missingHeader = headerRow.createCell(missingCol);
+                missingHeader.setCellValue("OS Missing Expected match in OT");
                 if (headerRow.getCell(0) != null && headerRow.getCell(0).getCellStyle() != null) {
-                    diffHeader.setCellStyle(headerRow.getCell(0).getCellStyle());
+                    missingHeader.setCellStyle(headerRow.getCell(0).getCellStyle());
                 }
 
-                org.apache.poi.ss.usermodel.Cell summaryHeader = headerRow.createCell(summaryCol);
-                summaryHeader.setCellValue("Summary");
+                org.apache.poi.ss.usermodel.Cell additionalHeader = headerRow.createCell(additionalCol);
+                additionalHeader.setCellValue("Additional Matches in OT");
                 if (headerRow.getCell(0) != null && headerRow.getCell(0).getCellStyle() != null) {
-                    summaryHeader.setCellStyle(headerRow.getCell(0).getCellStyle());
+                    additionalHeader.setCellStyle(headerRow.getCell(0).getCellStyle());
                 }
 
-                // Add status columns if analyzer=Y, right after OS/OT RULESET_RESULTS
-                int statusColStart = -1;
-                int sourceInputCol = -1;
-                int targetInputCol = -1;
-                int targetColumnCol = -1;
-                int watchlistCol = -1;
-                int nuidCol = -1;
-                boolean headersFound = false;
-
-                if ("Y".equalsIgnoreCase(props.getProperty("analyzer"))) {
-                    for (int i = 0; i < headerRow.getLastCellNum(); i++) {
-                        String header = headerRow.getCell(i).getStringCellValue();
-                        if ("Source Input".equalsIgnoreCase(header)) sourceInputCol = i;
-                        else if ("Target Input".equalsIgnoreCase(header)) targetInputCol = i;
-                        else if ("Target Column".equalsIgnoreCase(header)) targetColumnCol = i;
-                        else if ("Watchlist".equalsIgnoreCase(header)) watchlistCol = i;
-                        else if ("N_UID".equalsIgnoreCase(header)) nuidCol = i;
-                    }
-                    if (sourceInputCol == -1 || targetInputCol == -1 || targetColumnCol == -1 || watchlistCol == -1 || nuidCol == -1) {
-                        headersFound = false;
-                        System.out.println("Debug: analyzer=Y, required headers not found (case-insensitive), defaulting to Fail for all rows");
-                    } else {
-                        headersFound = true;
-                        System.out.println("Debug: analyzer=Y, found sourceInputCol=" + sourceInputCol + ", targetInputCol=" + targetInputCol + ", targetColumnCol=" + targetColumnCol + ", watchlistCol=" + watchlistCol + ", nuidCol=" + nuidCol);
-                    }
-
-                    if ("Y".equalsIgnoreCase(toggle)) {
-                        statusColStart = otResultCol + 1;
-                        headerRow.createCell(statusColStart).setCellValue("OS Status");
-                        headerRow.createCell(statusColStart + 1).setCellValue("OT Status");
-                    } else {
-                        statusColStart = osResultCol + 1;
-                        headerRow.createCell(statusColStart).setCellValue(currentEngine + " Status");
-                    }
-                    System.out.println("Debug: Status columns added, statusColStart=" + statusColStart);
+                org.apache.poi.ss.usermodel.Cell finalStatusHeader = headerRow.createCell(finalStatusCol);
+                finalStatusHeader.setCellValue("Final Status");
+                if (headerRow.getCell(0) != null && headerRow.getCell(0).getCellStyle() != null) {
+                    finalStatusHeader.setCellStyle(headerRow.getCell(0).getCellStyle());
                 }
 
                 // Freeze header row
@@ -412,67 +352,94 @@ public class MessageResponseAnalyzerCS {
                     if (otEddMatchCol != -1) row.createCell(otEddMatchCol).setCellValue(otCategorizedCounts[2]); // EDD
                     if (otPrbMatchCol != -1) row.createCell(otPrbMatchCol).setCellValue(otCategorizedCounts[3]); // PRB
 
-                    // Compare the results
-                    ComparisonResult comparison = compareJsonResults(osResult, otResult);
+                    // New OS/OT comparison logic
+                    if ("Y".equals(props.getProperty("analyzeAfterToggle", "N"))) {
+                        RulesetMatches osMatches = parseToMatches(osResult, "OS");
+                        RulesetMatches otMatches = parseToMatches(otResult, "OT");
 
-                    // Write results to new columns
-                    row.createCell(comparisonCol).setCellValue(comparison.isIdentical ? "Identical" : "Different");
+                        java.util.Map<String, java.util.List<MatchObject>> commonByType = new java.util.HashMap<>();
+                        java.util.Map<String, java.util.List<MatchObject>> osMissingByType = new java.util.HashMap<>();
+                        java.util.Map<String, java.util.List<MatchObject>> otAdditionalByType = new java.util.HashMap<>();
 
-                    // Apply color formatting
-                    Cell comparisonCell = row.getCell(comparisonCol);
-                    if (comparison.isIdentical) {
-                        // Green for identical
-                        org.apache.poi.ss.usermodel.CellStyle style = workbook.createCellStyle();
-                        org.apache.poi.xssf.usermodel.XSSFCellStyle xssfStyle = (org.apache.poi.xssf.usermodel.XSSFCellStyle) style;
-                        byte[] green = new byte[]{(byte)144, (byte)238, (byte)144};
-                        xssfStyle.setFillForegroundColor(new org.apache.poi.xssf.usermodel.XSSFColor(green, null));
-                        xssfStyle.setFillPattern(org.apache.poi.ss.usermodel.FillPatternType.SOLID_FOREGROUND);
-                        comparisonCell.setCellStyle(style);
-                    } else {
-                        // Red for different
-                        org.apache.poi.ss.usermodel.CellStyle style = workbook.createCellStyle();
-                        org.apache.poi.xssf.usermodel.XSSFCellStyle xssfStyle = (org.apache.poi.xssf.usermodel.XSSFCellStyle) style;
-                        byte[] red = new byte[]{(byte)255, (byte)182, (byte)193};
-                        xssfStyle.setFillForegroundColor(new org.apache.poi.xssf.usermodel.XSSFColor(red, null));
-                        xssfStyle.setFillPattern(org.apache.poi.ss.usermodel.FillPatternType.SOLID_FOREGROUND);
-                        comparisonCell.setCellStyle(style);
-                    }
+                        for (String type : new String[]{"SAN", "PEP", "EDD", "PRB"}) {
+                            java.util.List<MatchObject> osList = osMatches.matchesByType.getOrDefault(type, new java.util.ArrayList<>());
+                            java.util.List<MatchObject> otList = otMatches.matchesByType.getOrDefault(type, new java.util.ArrayList<>());
 
-                    row.createCell(diffPercentCol).setCellValue(comparison.differencePercent + "%");
-                    row.createCell(summaryCol).setCellValue(comparison.summary);
+                            java.util.List<MatchObject> common = new java.util.ArrayList<>();
+                            java.util.List<MatchObject> osRemaining = new java.util.ArrayList<>(osList);
+                            java.util.List<MatchObject> otRemaining = new java.util.ArrayList<>(otList);
 
-                    // Add status if analyzer=Y
-                    if ("Y".equalsIgnoreCase(props.getProperty("analyzer"))) {
-                        if (headersFound) {
-                            String sourceInput = row.getCell(sourceInputCol).getStringCellValue();
-                            String targetInput = row.getCell(targetInputCol).getStringCellValue();
-                            String targetColumn = row.getCell(targetColumnCol).getStringCellValue();
-                            String watchlist = row.getCell(watchlistCol).getStringCellValue();
-                            String n_uid = row.getCell(nuidCol).getStringCellValue();
-                            if ("Y".equalsIgnoreCase(toggle)) {
-                                boolean osPass = checkMatch(osResult, watchlist, n_uid, targetColumn, "OS");
-                                boolean otPass = checkMatch(otResult, watchlist, n_uid, targetColumn, "OT");
-                                Cell osCell = row.createCell(statusColStart);
-                                setPassFail(osCell, osPass, workbook);
-                                Cell otCell = row.createCell(statusColStart + 1);
-                                setPassFail(otCell, otPass, workbook);
-                            } else {
-                                boolean pass = checkMatch(osResult, watchlist, n_uid, targetColumn, "OS");
-                                Cell cell = row.createCell(statusColStart);
-                                setPassFail(cell, pass, workbook);
+                            for (int i = osRemaining.size() - 1; i >= 0; i--) {
+                                MatchObject osMatch = osRemaining.get(i);
+                                int idx = otRemaining.indexOf(osMatch);
+                                if (idx != -1) {
+                                    common.add(osMatch);
+                                    osRemaining.remove(i);
+                                    otRemaining.remove(idx);
+                                }
                             }
-                        } else {
-                            // Default to Fail
-                            if ("Y".equalsIgnoreCase(toggle)) {
-                                Cell osCell = row.createCell(statusColStart);
-                                setPassFail(osCell, false, workbook);
-                                Cell otCell = row.createCell(statusColStart + 1);
-                                setPassFail(otCell, false, workbook);
-                            } else {
-                                Cell cell = row.createCell(statusColStart);
-                                setPassFail(cell, false, workbook);
-                            }
+
+                            if (!common.isEmpty()) commonByType.put(type, common);
+                            if (!osRemaining.isEmpty()) osMissingByType.put(type, osRemaining);
+                            if (!otRemaining.isEmpty()) otAdditionalByType.put(type, otRemaining);
                         }
+
+                        // Create JSON strings
+                        org.json.JSONObject commonJson = new org.json.JSONObject();
+                        for (java.util.Map.Entry<String, java.util.List<MatchObject>> entry : commonByType.entrySet()) {
+                            org.json.JSONArray arr = new org.json.JSONArray();
+                            for (MatchObject mo : entry.getValue()) arr.put(new org.json.JSONObject(mo.toString()));
+                            commonJson.put(entry.getKey(), arr);
+                        }
+
+                        org.json.JSONObject missingJson = new org.json.JSONObject();
+                        for (java.util.Map.Entry<String, java.util.List<MatchObject>> entry : osMissingByType.entrySet()) {
+                            org.json.JSONArray arr = new org.json.JSONArray();
+                            for (MatchObject mo : entry.getValue()) arr.put(new org.json.JSONObject(mo.toString()));
+                            missingJson.put(entry.getKey(), arr);
+                        }
+
+                        org.json.JSONObject additionalJson = new org.json.JSONObject();
+                        for (java.util.Map.Entry<String, java.util.List<MatchObject>> entry : otAdditionalByType.entrySet()) {
+                            org.json.JSONArray arr = new org.json.JSONArray();
+                            for (MatchObject mo : entry.getValue()) arr.put(new org.json.JSONObject(mo.toString()));
+                            additionalJson.put(entry.getKey(), arr);
+                        }
+
+                        // Write to columns
+                        row.createCell(commonCol).setCellValue(commonJson.toString());
+                        row.createCell(missingCol).setCellValue(missingJson.toString());
+                        row.createCell(additionalCol).setCellValue(additionalJson.toString());
+
+                        // Determine final status
+                        boolean hasCommon = !commonByType.isEmpty();
+                        boolean hasMissing = !osMissingByType.isEmpty();
+                        boolean hasAdditional = !otAdditionalByType.isEmpty();
+
+                        String status;
+                        if (!hasCommon) {
+                            status = "Missing Required";
+                        } else if (!hasMissing && !hasAdditional) {
+                            status = "Exact";
+                        } else if (!hasMissing && hasAdditional) {
+                            status = "Exact - Additional OT Matches";
+                        } else {
+                            status = "Missing Required Matches";
+                        }
+
+                        Cell statusCell = row.createCell(finalStatusCol);
+                        statusCell.setCellValue(status);
+
+                        // Set color
+                        org.apache.poi.ss.usermodel.CellStyle style = workbook.createCellStyle();
+                        org.apache.poi.xssf.usermodel.XSSFCellStyle xssfStyle = (org.apache.poi.xssf.usermodel.XSSFCellStyle) style;
+                        if (status.equals("Exact") || status.equals("Exact - Additional OT Matches")) {
+                            xssfStyle.setFillForegroundColor(new org.apache.poi.xssf.usermodel.XSSFColor(new byte[]{(byte)144, (byte)238, (byte)144}, null));
+                        } else {
+                            xssfStyle.setFillForegroundColor(new org.apache.poi.xssf.usermodel.XSSFColor(new byte[]{(byte)255, (byte)182, (byte)193}, null));
+                        }
+                        style.setFillPattern(org.apache.poi.ss.usermodel.FillPatternType.SOLID_FOREGROUND);
+                        statusCell.setCellStyle(style);
                     }
                 }
 
@@ -510,89 +477,6 @@ public class MessageResponseAnalyzerCS {
             e.printStackTrace();
             throw new Exception("Something went wrong while comparing results", e);
         }
-    }
-
-    private static ComparisonResult compareJsonResults(String osResult, String otResult) {
-        ComparisonResult result = new ComparisonResult();
-
-        if (osResult == null || osResult.isEmpty() || otResult == null || otResult.isEmpty()) {
-            result.isIdentical = false;
-            result.differencePercent = 100;
-            result.summary = "One or both results are empty";
-            return result;
-        }
-
-        try {
-            // Parse RULESET_RESULT objects (maps keyed by rulesetId)
-            org.json.JSONObject osObj = new org.json.JSONObject(osResult);
-            org.json.JSONObject otObj = new org.json.JSONObject(otResult);
-
-            // Build maps from rulesetId to matchCount
-            java.util.Map<String, Integer> osRulesets = new java.util.HashMap<>();
-            java.util.Map<String, Integer> otRulesets = new java.util.HashMap<>();
-
-            // Iterate through OS rulesets
-            java.util.Iterator<String> osKeys = osObj.keys();
-            while (osKeys.hasNext()) {
-                String rulesetId = osKeys.next();
-                org.json.JSONObject ruleset = osObj.getJSONObject(rulesetId);
-                int matchCount = ruleset.getInt("matchCount");
-                osRulesets.put(rulesetId, matchCount);
-            }
-
-            // Iterate through OT rulesets
-            java.util.Iterator<String> otKeys = otObj.keys();
-            while (otKeys.hasNext()) {
-                String rulesetId = otKeys.next();
-                org.json.JSONObject ruleset = otObj.getJSONObject(rulesetId);
-                int matchCount = ruleset.getInt("matchCount");
-                otRulesets.put(rulesetId, matchCount);
-            }
-
-            // Compare the ruleset maps
-            java.util.Set<String> allRulesetIds = new java.util.HashSet<>();
-            allRulesetIds.addAll(osRulesets.keySet());
-            allRulesetIds.addAll(otRulesets.keySet());
-
-            int totalRulesets = allRulesetIds.size();
-            int differentRulesets = 0;
-            java.util.List<String> differences = new java.util.ArrayList<>();
-
-            for (String rulesetId : allRulesetIds) {
-                Integer osCount = osRulesets.get(rulesetId);
-                Integer otCount = otRulesets.get(rulesetId);
-
-                if (osCount == null) {
-                    differentRulesets++;
-                    differences.add(rulesetId + "(missing in OS)");
-                } else if (otCount == null) {
-                    differentRulesets++;
-                    differences.add(rulesetId + "(missing in OT)");
-                } else if (!osCount.equals(otCount)) {
-                    differentRulesets++;
-                    differences.add(rulesetId + "(" + osCount + "≠" + otCount + ")");
-                }
-            }
-
-            result.isIdentical = differentRulesets == 0;
-            result.differencePercent = totalRulesets > 0 ? (differentRulesets * 100) / totalRulesets : 0;
-
-            if (result.isIdentical) {
-                result.summary = "All " + totalRulesets + " rulesets identical";
-            } else {
-                result.summary = String.join("; ", differences.subList(0, Math.min(differences.size(), 5)));
-                if (differences.size() > 5) {
-                    result.summary += "; ... and " + (differences.size() - 5) + " more";
-                }
-            }
-
-        } catch (Exception e) {
-            result.isIdentical = false;
-            result.differencePercent = 100;
-            result.summary = "Error parsing RULESET_RESULTS: " + e.getMessage();
-        }
-
-        return result;
     }
 
     private static int sumMatchCount(org.json.JSONObject rulesetObj) {
@@ -635,12 +519,6 @@ public class MessageResponseAnalyzerCS {
         return counts;
     }
 
-    private static class ComparisonResult {
-        boolean isIdentical;
-        int differencePercent;
-        String summary;
-    }
-
     private static final java.util.Map<String, java.util.Map<String, String>> wlToIndex = java.util.Map.ofEntries(
         java.util.Map.entry("EU", java.util.Map.of("OS", "idx_european_union", "OT", "FCC_WL_EUROPEAN_UNION_OT")),
         java.util.Map.entry("OFAC", java.util.Map.of("OS", "idx_ofac", "OT", "FCC_WL_OFAC_OT")),
@@ -652,6 +530,113 @@ public class MessageResponseAnalyzerCS {
         java.util.Map.entry("WCPREM", java.util.Map.of("OS", "idx_wc_premium", "OT", "FCC_WL_WC_PREMIUM_OT")),
         java.util.Map.entry("PRV_WL1", java.util.Map.of("OS", "idx_privatelist", "OT", "FCC_WL_PRIVATELIST_OT"))
     );
+
+    // Reverse map for index to watchlist
+    private static final java.util.Map<String, String> indexToWatchlist = java.util.Map.ofEntries(
+        java.util.Map.entry("idx_european_union", "EU"),
+        java.util.Map.entry("FCC_WL_EUROPEAN_UNION_OT", "EU"),
+        java.util.Map.entry("idx_ofac", "OFAC"),
+        java.util.Map.entry("FCC_WL_OFAC_OT", "OFAC"),
+        java.util.Map.entry("idx_un", "UN"),
+        java.util.Map.entry("FCC_WL_UN_OT", "UN"),
+        java.util.Map.entry("idx_hmt", "HMT"),
+        java.util.Map.entry("FCC_WL_HMT_OT", "HMT"),
+        java.util.Map.entry("idx_djw", "DJW"),
+        java.util.Map.entry("FCC_WL_DJW_OT", "DJW"),
+        java.util.Map.entry("idx_tf_dim_country", "COUNTRY"),
+        java.util.Map.entry("FCC_TF_DIM_COUNTRY_OT", "COUNTRY"),
+        java.util.Map.entry("idx_wc_standard", "WCSTANDARD"),
+        java.util.Map.entry("FCC_WL_WC_STANDARD_OT", "WCSTANDARD"),
+        java.util.Map.entry("idx_wc_premium", "WCPREM"),
+        java.util.Map.entry("FCC_WL_WC_PREMIUM_OT", "WCPREM"),
+        java.util.Map.entry("idx_privatelist", "PRV_WL1"),
+        java.util.Map.entry("FCC_WL_PRIVATELIST_OT", "PRV_WL1")
+    );
+
+    private static class MatchObject {
+        String n_uid;
+        String watchlist;
+        String ruleName;
+        java.util.List<String> matchedCols;
+
+        MatchObject(String n_uid, String watchlist, String ruleName, java.util.List<String> matchedCols) {
+            this.n_uid = n_uid;
+            this.watchlist = watchlist;
+            this.ruleName = ruleName;
+            this.matchedCols = new ArrayList<>(matchedCols);
+            Collections.sort(this.matchedCols);
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (this == obj) return true;
+            if (obj == null || getClass() != obj.getClass()) return false;
+            MatchObject that = (MatchObject) obj;
+            return java.util.Objects.equals(n_uid, that.n_uid) &&
+                   java.util.Objects.equals(watchlist, that.watchlist) &&
+                   java.util.Objects.equals(ruleName, that.ruleName) &&
+                   java.util.Objects.equals(matchedCols, that.matchedCols);  // Exact list match
+        }
+
+        @Override
+        public int hashCode() {
+            return java.util.Objects.hash(n_uid, watchlist, ruleName, matchedCols);
+        }
+
+        @Override
+        public String toString() {
+            return new org.json.JSONObject()
+                .put("n_uid", n_uid)
+                .put("watchlist", watchlist)
+                .put("ruleName", ruleName)
+                .put("matchedCols", new org.json.JSONArray(matchedCols))
+                .toString();
+        }
+    }
+
+    private static class RulesetMatches {
+        java.util.Map<String, java.util.List<MatchObject>> matchesByType = new java.util.HashMap<>();
+    }
+
+    private static RulesetMatches parseToMatches(String resultJson, String engine) {
+        RulesetMatches rms = new RulesetMatches();
+        if (resultJson == null || resultJson.isEmpty()) return rms;
+        try {
+            org.json.JSONObject obj = new org.json.JSONObject(resultJson);
+            java.util.Iterator<String> keys = obj.keys();
+            while (keys.hasNext()) {
+                String rulesetId = keys.next();
+                org.json.JSONObject ruleset = obj.getJSONObject(rulesetId);
+                org.json.JSONArray matches = ruleset.optJSONArray("matches");
+                if (matches != null) {
+                    for (int i = 0; i < matches.length(); i++) {
+                        org.json.JSONObject match = matches.getJSONObject(i);
+                        String n_uid = match.optString("n_uid", "");
+                        String indexName = match.optString("indexName", "");
+                        String watchlist = indexToWatchlist.get(indexName);
+                        if (watchlist == null) continue; // Skip unknown index
+                        String ruleName = match.optString("ruleName", "");
+                        org.json.JSONArray matchedColsJson = match.optJSONArray("matchedCols");
+                        java.util.List<String> matchedCols = new java.util.ArrayList<>();
+                        if (matchedColsJson != null) {
+                            for (int k = 0; k < matchedColsJson.length(); k++) {
+                                matchedCols.add(matchedColsJson.getString(k));
+                            }
+                        }
+                        String type = "PRB"; // Default to PRB
+                        if (rulesetId.contains("SAN")) type = "SAN";
+                        else if (rulesetId.contains("PEP")) type = "PEP";
+                        else if (rulesetId.contains("EDD")) type = "EDD";
+                        else if (rulesetId.toLowerCase().contains("country")) type = "PRB";
+                        rms.matchesByType.computeIfAbsent(type, k -> new java.util.ArrayList<>()).add(new MatchObject(n_uid, watchlist, ruleName, matchedCols));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Error parsing to matches: " + e.getMessage());
+        }
+        return rms;
+    }
 
     private static boolean checkMatch(String resultJson, String watchlist, String n_uid, String targetColumn, String engine) {
         if (resultJson == null || resultJson.isEmpty()) return false;
