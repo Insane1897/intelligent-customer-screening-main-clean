@@ -332,8 +332,8 @@ public class MessageProcessingUtilityCS {
 
     private static Map<String, String> processRequests(Map<String, String> seqIdToRequestMap, String tokenUrl, String usernm, String pwd, String executeUrl, String getUrlTemplate, Sheet sheet, Map<String, Integer> seqIdToRowNum, DataFormatter formatter, int processorStartColumn, String webServiceId, CellStyle headStyle, String matchingEngine, String candidateType) {
         Map<String, String> failedRequestMap = new ConcurrentHashMap<>();
-        int threadPoolSize = 20; // Configurable thread pool size
-        int maxConcurrentRequests = 10; // Rate limiting
+        int threadPoolSize = 50; // Configurable thread pool size
+        int maxConcurrentRequests = 30; // Rate limiting
 
         ExecutorService executor = Executors.newFixedThreadPool(threadPoolSize);
         Semaphore rateLimiter = new Semaphore(maxConcurrentRequests);
