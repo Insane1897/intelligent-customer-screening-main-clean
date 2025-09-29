@@ -69,6 +69,9 @@ public class RawMessageGeneratorCS {
     private static List<String> indStopwordList = new ArrayList<>();
     private static Map<String, List<String>> entSynonymMap = new HashMap<>();
     private static List<String> entStopwordList = new ArrayList<>();
+    // Stopword message counters for capping
+    private static int indStopwordCount = 0;
+    private static int entStopwordCount = 0;
 
     private static void loadMaps(Properties props, String candidateType, Connection connection) {
         if ("BOTH".equalsIgnoreCase(candidateType)) {
@@ -156,13 +159,17 @@ public class RawMessageGeneratorCS {
             String tagName = props.getProperty(ConstantsCS.TAGNAME);
             String webserviceId = props.getProperty(ConstantsCS.WEBSERVICE_ID);
 
+            // Load stopword caps
+            int maxIndStopwords = Integer.parseInt(props.getProperty("stopword.max.ind", "0"));
+            int maxEntStopwords = Integer.parseInt(props.getProperty("stopword.max.ent", "0"));
+
             loadMaps(props, candidateType, connection);
 
             if ("BOTH".equalsIgnoreCase(candidateType)) {
-                processCandidateType("IND", watchlistTypes, props, connection, messages, tagName, webserviceId);
-                processCandidateType("ENT", watchlistTypes, props, connection, messages, tagName, webserviceId);
+                processCandidateType("IND", watchlistTypes, props, connection, messages, tagName, webserviceId, maxIndStopwords, maxEntStopwords);
+                processCandidateType("ENT", watchlistTypes, props, connection, messages, tagName, webserviceId, maxIndStopwords, maxEntStopwords);
             } else {
-                processCandidateType(candidateType, watchlistTypes, props, connection, messages, tagName, webserviceId);
+                processCandidateType(candidateType, watchlistTypes, props, connection, messages, tagName, webserviceId, maxIndStopwords, maxEntStopwords);
             }
 
             writeJsonAsExcelFile(messages, props.getProperty(ConstantsCS.TRANSACTION_SERVICE), tagName, props.getProperty(ConstantsCS.WEBSERVICE), candidateType);
@@ -180,7 +187,7 @@ public class RawMessageGeneratorCS {
         System.out.println("Time taken by Raw Message Generator CS: " + (endTime - startTime) / 1000L + " seconds");
     }
 
-    private static void processCandidateType(String type, String[] watchlistTypes, Properties props, Connection connection, List<Map<String, Object>> messages, String tagName, String webserviceId) throws Exception {
+    private static void processCandidateType(String type, String[] watchlistTypes, Properties props, Connection connection, List<Map<String, Object>> messages, String tagName, String webserviceId, int maxIndStopwords, int maxEntStopwords) throws Exception {
         String sourceFileName = "IND".equalsIgnoreCase(type) ? "source_ind.json" : "source_ent.json";
         String srcFilePath = ConstantsCS.PARENT_DIRECTORY + File.separator + ConstantsCS.BIN_FOLDER_NAME + File.separator + sourceFileName;
         String srcFile = loadJsonFromFile(srcFilePath, props);
@@ -225,7 +232,7 @@ public class RawMessageGeneratorCS {
             List<RowData> rows = prepareQueryAndGetTableData(connection, props, tableName, type, filteredTokenToColumnMap.values());
             List<RowData> splitRows = splitSemicolonNames(rows, type, filteredTokenToColumnMap);
 
-            generateRawMessagesForRows(splitRows, props, templateJson, tableName, tagName, webserviceId, type, messages, wlType, filteredTokenToColumnMap, validVariationTokens, combineVariations);
+            generateRawMessagesForRows(splitRows, props, templateJson, tableName, tagName, webserviceId, type, messages, wlType, filteredTokenToColumnMap, validVariationTokens, combineVariations, maxIndStopwords, maxEntStopwords);
 
             // Transliteration: select non-English rows and generate messages
             if ("Y".equalsIgnoreCase(props.getProperty("enableTransliteration"))) {
@@ -377,7 +384,7 @@ public class RawMessageGeneratorCS {
         return splitRows;
     }
 
-private static void generateRawMessagesForRows(List<RowData> rows, Properties props, JSONObject templateJson, String tableName, String tagName, String webserviceId, String candidateType, List<Map<String, Object>> messages, String wlType, Map<String, String> tokenToColumnMap, List<String> validVariationTokens, String combineVariations) {
+private static void generateRawMessagesForRows(List<RowData> rows, Properties props, JSONObject templateJson, String tableName, String tagName, String webserviceId, String candidateType, List<Map<String, Object>> messages, String wlType, Map<String, String> tokenToColumnMap, List<String> validVariationTokens, String combineVariations, int maxIndStopwords, int maxEntStopwords) {
         Set<String> seenMessages = new HashSet<>();
 
         for (RowData row : rows) {
@@ -407,16 +414,16 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
             JSONObject jsonExact = buildJsonWithAllTokens(templateJson, exactTokenToValue);
             String jsonStrExact = jsonExact.toString();
             String targetInputExact = buildTargetInput(tokenToColumnMap, exactTokenToValue);
-            addToArray(jsonStrExact, "EXACT", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInputExact, targetColumn, "EXACT");
+            addToArray(jsonStrExact, "EXACT", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInputExact, targetColumn, "EXACT", candidateType, maxIndStopwords, maxEntStopwords);
 
             // Generate variations
             if (!validVariationTokens.isEmpty()) {
-                generateVariationsForRow(row, props, templateJson, tableName, tagName, webserviceId, candidateType, messages, wlType, tokenToColumnMap, validVariationTokens, combineVariations, sourceInput, targetColumn, seenMessages, uid);
+                generateVariationsForRow(row, props, templateJson, tableName, tagName, webserviceId, candidateType, messages, wlType, tokenToColumnMap, validVariationTokens, combineVariations, sourceInput, targetColumn, seenMessages, uid, maxIndStopwords, maxEntStopwords);
             }
         }
     }
 
-    private static void generateVariationsForRow(RowData row, Properties props, JSONObject templateJson, String tableName, String tagName, String webserviceId, String candidateType, List<Map<String, Object>> messages, String wlType, Map<String, String> tokenToColumnMap, List<String> validVariationTokens, String combineVariations, String sourceInput, String targetColumn, Set<String> seenMessages, String uid) {
+    private static void generateVariationsForRow(RowData row, Properties props, JSONObject templateJson, String tableName, String tagName, String webserviceId, String candidateType, List<Map<String, Object>> messages, String wlType, Map<String, String> tokenToColumnMap, List<String> validVariationTokens, String combineVariations, String sourceInput, String targetColumn, Set<String> seenMessages, String uid, int maxIndStopwords, int maxEntStopwords) {
         // Generate variations for CED1, CED2, CED3, REP1, REP2, REP3, STOPWORD, SYNONYM
         String[] variationTypes = {"ced1", "ced2", "ced3", "rep1", "rep2", "rep3"};
         boolean enableStopword = "Y".equalsIgnoreCase(props.getProperty("enableIndStopword")) || "Y".equalsIgnoreCase(props.getProperty("enableEntStopword"));
@@ -437,7 +444,7 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
                             JSONObject jsonObj = buildJsonWithAllTokens(templateJson, tokenToVariant);
                             String jsonStr = jsonObj.toString();
                             String targetInput = buildTargetInput(tokenToColumnMap, tokenToVariant);
-                            addToArray(jsonStr, variationType.toUpperCase(), messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, variationType.toUpperCase());
+                            addToArray(jsonStr, variationType.toUpperCase(), messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, variationType.toUpperCase(), candidateType, maxIndStopwords, maxEntStopwords);
                         }
                     }
                 }
@@ -458,7 +465,7 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
                             JSONObject jsonObj = buildJsonWithAllTokens(templateJson, tokenToVariant);
                             String jsonStr = jsonObj.toString();
                             String targetInput = buildTargetInput(tokenToColumnMap, tokenToVariant);
-                            addToArray(jsonStr, "STOPWORD", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "STOPWORD");
+                            addToArray(jsonStr, "STOPWORD", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "STOPWORD", candidateType, maxIndStopwords, maxEntStopwords);
                         }
                     }
                 }
@@ -478,7 +485,7 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
                         JSONObject jsonObj = buildJsonWithAllTokens(templateJson, tokenToVariant);
                         String jsonStr = jsonObj.toString();
                         String targetInput = buildTargetInput(tokenToColumnMap, tokenToVariant);
-                        addToArray(jsonStr, "SYNONYM", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "SYNONYM");
+                        addToArray(jsonStr, "SYNONYM", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "SYNONYM", candidateType, maxIndStopwords, maxEntStopwords);
                     }
                 }
             }
@@ -506,7 +513,7 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
                         JSONObject jsonObj = buildJsonWithAllTokens(templateJson, tokenToVariant);
                         String jsonStr = jsonObj.toString();
                         String targetInput = buildTargetInput(tokenToColumnMap, tokenToVariant);
-                        addToArray(jsonStr, variationType.toUpperCase(), messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, variationType.toUpperCase());
+                        addToArray(jsonStr, variationType.toUpperCase(), messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, variationType.toUpperCase(), candidateType, maxIndStopwords, maxEntStopwords);
                     }
                 }
             }
@@ -535,7 +542,7 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
                         JSONObject jsonObj = buildJsonWithAllTokens(templateJson, tokenToVariant);
                         String jsonStr = jsonObj.toString();
                         String targetInput = buildTargetInput(tokenToColumnMap, tokenToVariant);
-                        addToArray(jsonStr, "STOPWORD", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "STOPWORD");
+                        addToArray(jsonStr, "STOPWORD", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "STOPWORD", candidateType, maxIndStopwords, maxEntStopwords);
                     }
                 }
             }
@@ -560,10 +567,10 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
                             tokenToVariant.put(entry.getKey(), asString(row.get(entry.getValue())));
                         }
                     }
-                    JSONObject jsonObj = buildJsonWithAllTokens(templateJson, tokenToVariant);
-                    String jsonStr = jsonObj.toString();
-                    String targetInput = buildTargetInput(tokenToColumnMap, tokenToVariant);
-                    addToArray(jsonStr, "SYNONYM", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "SYNONYM");
+                        JSONObject jsonObj = buildJsonWithAllTokens(templateJson, tokenToVariant);
+                        String jsonStr = jsonObj.toString();
+                        String targetInput = buildTargetInput(tokenToColumnMap, tokenToVariant);
+                        addToArray(jsonStr, "SYNONYM", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "SYNONYM", candidateType, maxIndStopwords, maxEntStopwords);
                 }
             }
         }
@@ -614,7 +621,7 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
             }
             JSONObject json = buildJsonWithAllTokens(templateJson, tokenToValue);
             String jsonStr = json.toString();
-            addToArray(jsonStr, "TRANSLIT", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInputBuilder.toString(), targetColumn, "TRANSLIT");
+            addToArray(jsonStr, "TRANSLIT", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInputBuilder.toString(), targetColumn, "TRANSLIT", candidateType, 0, 0);
         }
     }
 
@@ -674,8 +681,29 @@ private static String buildJson(String template, String name, String candidateTy
         return json.toString();
     }
 
-    private static void addToArray(String jsonStr, String variantType, List<Map<String, Object>> messages, Set<String> seen, String uid, String tableName, String wlType, String sourceInput, String targetInput, String targetColumn, String type) {
+    private static void addToArray(String jsonStr, String variantType, List<Map<String, Object>> messages, Set<String> seen, String uid, String tableName, String wlType, String sourceInput, String targetInput, String targetColumn, String type, String candidateType, int maxIndStopwords, int maxEntStopwords) {
         if (seen.add(jsonStr + type)) {  // Unique by json + type
+            if (variantType.equals("STOPWORD")) {
+                boolean canAdd = false;
+                if ("IND".equalsIgnoreCase(candidateType)) {
+                    if (maxIndStopwords == 0 || indStopwordCount < maxIndStopwords) {
+                        canAdd = true;
+                        indStopwordCount++;
+                    } else {
+                        System.out.println("IND STOPWORD cap reached (" + indStopwordCount + "), skipping further.");
+                    }
+                } else if ("ENT".equalsIgnoreCase(candidateType)) {
+                    if (maxEntStopwords == 0 || entStopwordCount < maxEntStopwords) {
+                        canAdd = true;
+                        entStopwordCount++;
+                    } else {
+                        System.out.println("ENT STOPWORD cap reached (" + entStopwordCount + "), skipping further.");
+                    }
+                } else {
+                    canAdd = true; // For other types, no cap
+                }
+                if (!canAdd) return;
+            }
             Map<String, Object> meta = new HashMap<>();
             meta.put("json", jsonStr);
             meta.put("variantType", variantType);
@@ -850,7 +878,7 @@ private static void writeJsonAsExcelFile(List<Map<String, Object>> messages, Str
 
         Row headerRow = sheet.createRow(0);
         XSSFCellStyle headStyle = (XSSFCellStyle) workbook.createCellStyle();
-        XSSFColor headerColor = new XSSFColor(new java.awt.Color(162, 196, 201));
+        XSSFColor headerColor = new XSSFColor(new byte[]{(byte)162, (byte)196, (byte)201}, null);
         headStyle.setFillForegroundColor(headerColor);
         headStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
         Font font = workbook.createFont();
