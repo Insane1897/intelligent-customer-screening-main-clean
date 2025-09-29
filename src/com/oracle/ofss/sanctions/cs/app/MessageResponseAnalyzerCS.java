@@ -95,7 +95,17 @@ public class MessageResponseAnalyzerCS {
                 row.createCell(pepCol).setCellValue(categorized[1]);
                 row.createCell(eddCol).setCellValue(categorized[2]);
                 row.createCell(prbCol).setCellValue(categorized[3]);
-                row.createCell(totalCol).setCellValue(sumMatchCount(new org.json.JSONObject(resultJson.isEmpty() ? "{}" : resultJson)));
+
+                int totalMatchCount = 0;
+                if (resultJson != null && !resultJson.trim().isEmpty() && resultJson.trim().startsWith("{") && !resultJson.contains("[response exceeds")) {
+                    try {
+                        totalMatchCount = sumMatchCount(new org.json.JSONObject(resultJson));
+                    } catch (Exception e) {
+                        System.err.println("Error parsing JSON for match count: " + e.getMessage());
+                        totalMatchCount = 0; // Default to 0 for invalid JSON
+                    }
+                }
+                row.createCell(totalCol).setCellValue(totalMatchCount);
 
                 // Status
                 boolean pass = false;
@@ -320,11 +330,11 @@ public class MessageResponseAnalyzerCS {
                     int osMatchCount = 0;
                     int otMatchCount = 0;
                     try {
-                        if (osResult != null && !osResult.isEmpty()) {
+                        if (osResult != null && !osResult.trim().isEmpty() && osResult.trim().startsWith("{") && !osResult.contains("[response exceeds")) {
                             org.json.JSONObject osObj = new org.json.JSONObject(osResult);
                             osMatchCount = sumMatchCount(osObj);
                         }
-                        if (otResult != null && !otResult.isEmpty()) {
+                        if (otResult != null && !otResult.trim().isEmpty() && otResult.trim().startsWith("{") && !otResult.contains("[response exceeds")) {
                             org.json.JSONObject otObj = new org.json.JSONObject(otResult);
                             otMatchCount = sumMatchCount(otObj);
                         }
@@ -600,7 +610,7 @@ public class MessageResponseAnalyzerCS {
 
     private static RulesetMatches parseToMatches(String resultJson, String engine) {
         RulesetMatches rms = new RulesetMatches();
-        if (resultJson == null || resultJson.isEmpty()) return rms;
+        if (resultJson == null || resultJson.trim().isEmpty() || !resultJson.trim().startsWith("{") || resultJson.contains("[response exceeds")) return rms;
         try {
             org.json.JSONObject obj = new org.json.JSONObject(resultJson);
             java.util.Iterator<String> keys = obj.keys();

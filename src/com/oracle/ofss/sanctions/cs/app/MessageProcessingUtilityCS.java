@@ -8,7 +8,7 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.text.SimpleDateFormat;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import javax.net.ssl.HttpsURLConnection;
@@ -44,6 +44,24 @@ public class MessageProcessingUtilityCS {
     private static String retryRequiredFlag = "Y";
     private static SimpleDateFormat sdf = new SimpleDateFormat(ConstantsCS.DATE_FORMAT);
     private static final AtomicInteger retryRequestNumber = new AtomicInteger(0);
+
+    private static class RequestProcessingResult {
+        String seqId;
+        String requestId;
+        String fullResponse;
+        int responseCode;
+        boolean failed;
+        String candType;
+
+        RequestProcessingResult(String seqId, String requestId, String fullResponse, int responseCode, boolean failed, String candType) {
+            this.seqId = seqId;
+            this.requestId = requestId;
+            this.fullResponse = fullResponse;
+            this.responseCode = responseCode;
+            this.failed = failed;
+            this.candType = candType;
+        }
+    }
 
     public static void screenRawMsg(String matchingEngine) throws Exception {
         long startTime = System.currentTimeMillis();
@@ -183,154 +201,197 @@ public class MessageProcessingUtilityCS {
 
     }
 
-    private static Map<String, String> processRequests(Map<String, String> seqIdToRequestMap, String tokenUrl, String usernm, String pwd, String executeUrl, String getUrlTemplate, Sheet sheet, Map<String, Integer> seqIdToRowNum, DataFormatter formatter, int processorStartColumn, String webServiceId, CellStyle headStyle, String matchingEngine, String candidateType) {
-        Map<String, String> failedRequestMap = new ConcurrentHashMap<>();
+    private static RequestProcessingResult processSingleRequest(String seqId, String requestBody, String tokenUrl, String usernm, String pwd, String executeUrl, String getUrlTemplate) {
+        long startTime = System.currentTimeMillis();
+        int retryCount = 0;
+        int responseCode = 500;
+        StringBuilder apiResponse = new StringBuilder();
+        BufferedReader br = null;
 
-        seqIdToRequestMap.entrySet().parallelStream().forEach(entry -> {
-            String seqId = entry.getKey();
-            String requestBody = entry.getValue();
-            long startTime = System.currentTimeMillis();
-            int retryCount = 0;
-            int responseCode = 500;
-            StringBuilder apiResponse = new StringBuilder();
-            BufferedReader br = null;
-
-String requestId = null;
-String fullResponse = null;
-System.out.println("[" + sdf.format(new Date()) + "] Executing REST call with SeqId: " + seqId);
-do {
-                if (retryCount > 0) {
-                    try {
-                        Thread.sleep(5000);
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                    }
-                    System.out.println("[" + sdf.format(new Date()) + "] Waiting for REST call to complete...");
+        String requestId = null;
+        String fullResponse = null;
+        System.out.println("[" + sdf.format(new Date()) + "] Executing REST call with SeqId: " + seqId);
+        do {
+            if (retryCount > 0) {
+                try {
+                    Thread.sleep(5000);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
                 }
-                int currentRetry = retryRequestNumber.incrementAndGet();
+                System.out.println("[" + sdf.format(new Date()) + "] Waiting for REST call to complete...");
+            }
+            int currentRetry = retryRequestNumber.incrementAndGet();
 
-                String bearerToken;
-                synchronized (tokenLock) {
-                    bearerToken = getAccessToken(tokenUrl, usernm, pwd);
+            String bearerToken;
+            synchronized (tokenLock) {
+                bearerToken = getAccessToken(tokenUrl, usernm, pwd);
+            }
+            System.out.println("Access token: " + bearerToken);
+
+            try {
+                // Step 1: POST to executeRealTime
+                URL executeResturl = createURL(executeUrl + "?reqId=" + currentRetry);
+                HttpsURLConnection executeConn = (HttpsURLConnection) executeResturl.openConnection();
+                executeConn.setRequestMethod("POST");
+                executeConn.setRequestProperty("Content-Type", "application/json");
+                executeConn.setRequestProperty("ofs_remote_user", "OFS_SRV_ACCT");
+                executeConn.setRequestProperty("accept-language", "en-US,en-U");
+                executeConn.setRequestProperty("authorization", "Bearer " + bearerToken);
+                executeConn.setRequestProperty("idcs_remote_user", "appuser");
+                executeConn.setRequestProperty("locale", "en-US");
+                executeConn.setHostnameVerifier((hostname, sslSession) -> true);
+                executeConn.setDoOutput(true);
+                try (OutputStream os = executeConn.getOutputStream()) {
+                    os.write(requestBody.getBytes(ConstantsCS.ENCODER));
+                    os.flush();
                 }
-System.out.println("Access token: " + bearerToken);
 
-try {
-                    // Step 1: POST to executeRealTime
-                    URL executeResturl = createURL(executeUrl + "?reqId=" + currentRetry);
-                    HttpsURLConnection executeConn = (HttpsURLConnection) executeResturl.openConnection();
-                    executeConn.setRequestMethod("POST");
-                    executeConn.setRequestProperty("Content-Type", "application/json");
-                    executeConn.setRequestProperty("ofs_remote_user", "OFS_SRV_ACCT");
-                    executeConn.setRequestProperty("accept-language", "en-US,en-U");
-                    executeConn.setRequestProperty("authorization", "Bearer " + bearerToken);
-                    executeConn.setRequestProperty("idcs_remote_user", "appuser");
-                    executeConn.setRequestProperty("locale", "en-US");
-                    executeConn.setHostnameVerifier((hostname, sslSession) -> true);
-                    executeConn.setDoOutput(true);
-                    try (OutputStream os = executeConn.getOutputStream()) {
-                        os.write(requestBody.getBytes(ConstantsCS.ENCODER));
-                        os.flush();
-                    }
+                responseCode = executeConn.getResponseCode();
+                if (responseCode >= 100 && responseCode <= 399) {
+                    br = new BufferedReader(new InputStreamReader(executeConn.getInputStream()));
+                } else {
+                    br = new BufferedReader(new InputStreamReader(executeConn.getErrorStream()));
+                }
 
-                    responseCode = executeConn.getResponseCode();
+                apiResponse = new StringBuilder();
+                String output;
+                while ((output = br.readLine()) != null) {
+                    apiResponse.append(output);
+                }
+                br.close();
+                executeConn.disconnect();
+
+                String postResponseStr = apiResponse.toString().trim();
+                if (!postResponseStr.isEmpty() && postResponseStr.startsWith("{")) {
+                    JSONObject executeJson = new JSONObject(postResponseStr);
+                    requestId = String.valueOf(executeJson.optLong("requestId"));
+                } else {
+                    System.err.println("Non-JSON POST response (code " + responseCode + "): " + postResponseStr.substring(0, Math.min(200, postResponseStr.length())));
+                    requestId = null;
+                }
+
+                // Step 2: GET to getForRequestId
+                if (requestId != null) {
+                    String getUrl = getUrlTemplate + requestId;
+                    URL getResturl = createURL(getUrl);
+                    HttpsURLConnection getConn = (HttpsURLConnection) getResturl.openConnection();
+                    getConn.setRequestMethod("GET");
+                    getConn.setRequestProperty("authorization", "Bearer " + bearerToken);
+                    getConn.setHostnameVerifier((hostname, sslSession) -> true);
+
+                    responseCode = getConn.getResponseCode();
                     if (responseCode >= 100 && responseCode <= 399) {
-                        br = new BufferedReader(new InputStreamReader(executeConn.getInputStream()));
+                        br = new BufferedReader(new InputStreamReader(getConn.getInputStream()));
                     } else {
-                        br = new BufferedReader(new InputStreamReader(executeConn.getErrorStream()));
+                        br = new BufferedReader(new InputStreamReader(getConn.getErrorStream()));
                     }
 
                     apiResponse = new StringBuilder();
-                    String output;
                     while ((output = br.readLine()) != null) {
                         apiResponse.append(output);
                     }
                     br.close();
-                    executeConn.disconnect();
+                    getConn.disconnect();
 
-                    String postResponseStr = apiResponse.toString().trim();
-                    if (!postResponseStr.isEmpty() && postResponseStr.startsWith("{")) {
-                        JSONObject executeJson = new JSONObject(postResponseStr);
-                        requestId = String.valueOf(executeJson.optLong("requestId"));
-                    } else {
-                        System.err.println("Non-JSON POST response (code " + responseCode + "): " + postResponseStr.substring(0, Math.min(200, postResponseStr.length())));
-                        requestId = null;
+                    String getResponseStr = apiResponse.toString().trim();
+                    fullResponse = getResponseStr;
+                    if (!getResponseStr.isEmpty() && !getResponseStr.startsWith("{")) {
+                        System.err.println("Non-JSON GET response (code " + responseCode + "): " + getResponseStr.substring(0, Math.min(200, getResponseStr.length())));
                     }
+                } else {
+                    fullResponse = null;
+                }
 
-                    // Step 2: GET to getForRequestId
-                    if (requestId != null) {
-                        String getUrl = getUrlTemplate + requestId;
-                        URL getResturl = createURL(getUrl);
-                        HttpsURLConnection getConn = (HttpsURLConnection) getResturl.openConnection();
-                        getConn.setRequestMethod("GET");
-                        getConn.setRequestProperty("authorization", "Bearer " + bearerToken);
-                        getConn.setHostnameVerifier((hostname, sslSession) -> true);
-
-                        responseCode = getConn.getResponseCode();
-                        if (responseCode >= 100 && responseCode <= 399) {
-                            br = new BufferedReader(new InputStreamReader(getConn.getInputStream()));
-                        } else {
-                            br = new BufferedReader(new InputStreamReader(getConn.getErrorStream()));
-                        }
-
-                        apiResponse = new StringBuilder();
-                        while ((output = br.readLine()) != null) {
-                            apiResponse.append(output);
-                        }
+            } catch (Exception e) {
+                e.printStackTrace();
+                responseCode = 500; // Treat as error for retry
+            } finally {
+                if (br != null) {
+                    try {
                         br.close();
-                        getConn.disconnect();
-
-                        String getResponseStr = apiResponse.toString().trim();
-                        fullResponse = getResponseStr;
-                        if (!getResponseStr.isEmpty() && !getResponseStr.startsWith("{")) {
-                            System.err.println("Non-JSON GET response (code " + responseCode + "): " + getResponseStr.substring(0, Math.min(200, getResponseStr.length())));
-                        }
-                    } else {
-                        fullResponse = null;
+                    } catch (IOException e) {
+                        e.printStackTrace();
                     }
+                }
+            }
+            retryCount++;
+        } while ("Y".equalsIgnoreCase(retryRequiredFlag) && responseCode > 399 && retryCount <= retryMaxCount);
 
-                } catch (Exception e) {
-                    e.printStackTrace();
-                    responseCode = 500; // Treat as error for retry
+        System.out.println("[" + sdf.format(new Date()) + "] ResponseCode: " + responseCode);
+
+        long endTime = System.currentTimeMillis();
+        System.out.println("=============================================================----------");
+        System.out.println("Time taken for rest call: " + (endTime - startTime) / 1000L + " seconds");
+        System.out.println("=============================================================----------");
+        System.out.println("=============================================================----------------------------------------------");
+
+        boolean failed = responseCode > 399;
+        String detectedCandType = detectCandidateTypeFromPayload(requestBody);
+        return new RequestProcessingResult(seqId, requestId, fullResponse, responseCode, failed, detectedCandType);
+    }
+
+    private static Map<String, String> processRequests(Map<String, String> seqIdToRequestMap, String tokenUrl, String usernm, String pwd, String executeUrl, String getUrlTemplate, Sheet sheet, Map<String, Integer> seqIdToRowNum, DataFormatter formatter, int processorStartColumn, String webServiceId, CellStyle headStyle, String matchingEngine, String candidateType) {
+        Map<String, String> failedRequestMap = new ConcurrentHashMap<>();
+        int threadPoolSize = 20; // Configurable thread pool size
+        int maxConcurrentRequests = 10; // Rate limiting
+
+        ExecutorService executor = Executors.newFixedThreadPool(threadPoolSize);
+        Semaphore rateLimiter = new Semaphore(maxConcurrentRequests);
+        List<CompletableFuture<RequestProcessingResult>> futures = new ArrayList<>();
+
+        // Submit async tasks
+        for (Map.Entry<String, String> entry : seqIdToRequestMap.entrySet()) {
+            String seqId = entry.getKey();
+            String requestBody = entry.getValue();
+
+            CompletableFuture<RequestProcessingResult> future = CompletableFuture.supplyAsync(() -> {
+                try {
+                    rateLimiter.acquire();
+                    return processSingleRequest(seqId, requestBody, tokenUrl, usernm, pwd, executeUrl, getUrlTemplate);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return new RequestProcessingResult(seqId, null, null, 500, true, "UNKNOWN");
                 } finally {
-                    if (br != null) {
-                        try {
-                            br.close();
-                        } catch (IOException e) {
-                            e.printStackTrace();
-                        }
-                    }
+                    rateLimiter.release();
                 }
-                retryCount++;
-            } while ("Y".equalsIgnoreCase(retryRequiredFlag) && responseCode > 399 && retryCount <= retryMaxCount);
+            }, executor);
 
-            System.out.println("[" + sdf.format(new Date()) + "] ResponseCode: " + responseCode);
+            futures.add(future);
+        }
 
-            long endTime = System.currentTimeMillis();
-            System.out.println("=============================================================----------");
-            System.out.println("Time taken for rest call: " + (endTime - startTime) / 1000L + " seconds");
-            System.out.println("=============================================================----------");
-            System.out.println("=============================================================----------------------------------------------");
+        // Wait for all to complete
+        CompletableFuture<Void> allDone = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
+        allDone.join();
 
-            String responseString = fullResponse != null ? fullResponse : "NA";
+        // Collect results
+        List<String> successfulRequestIds = new ArrayList<>();
+        Map<String, String> requestIdToType = new HashMap<>();
+        Map<String, RequestProcessingResult> resultsBySeqId = new HashMap<>();
 
-            String requestIdString = requestId != null ? requestId : "NA";
-            long matchCount = 0;
-            String status = "NA";
-            String caseId = "NA";
-            long filteredCount = 0;
+        for (CompletableFuture<RequestProcessingResult> future : futures) {
+            RequestProcessingResult result = future.join();
+            resultsBySeqId.put(result.seqId, result);
+            if (!result.failed && result.requestId != null) {
+                successfulRequestIds.add(result.requestId);
+                requestIdToType.put(result.requestId, result.candType);
+            } else if (result.failed) {
+                failedRequestMap.put(result.seqId, seqIdToRequestMap.get(result.seqId));
+            }
+        }
 
-            boolean isErrorToHandle = (responseCode == 400 || responseCode == 500 || responseCode == 503);
+        // Batch DB query for all successful requestIds
+        Map<String, JSONObject> batchedResults = fetchRuleSetResultsBatched(successfulRequestIds, matchingEngine, candidateType, requestIdToType);
 
-            if (responseCode <= 399 || isErrorToHandle) {
-                String trimmed = fullResponse == null ? "" : fullResponse.trim();
-                JSONObject rulesetResultsJson = new JSONObject();
-                if (requestId != null) {
-                    String rowCandType = "BOTH".equalsIgnoreCase(candidateType)
-                                         ? detectCandidateTypeFromPayload(requestBody)
-                                         : candidateType;
-                    rulesetResultsJson = fetchRuleSetResults(requestId, matchingEngine, rowCandType);
-                }
+        // Update Excel in a single pass
+        synchronized (sheet) {
+            for (Map.Entry<String, RequestProcessingResult> entry : resultsBySeqId.entrySet()) {
+                String seqId = entry.getKey();
+                RequestProcessingResult result = entry.getValue();
+                if (result.failed) continue; // Skip failed ones
+
+                String responseString = result.fullResponse != null ? result.fullResponse : "NA";
+                String requestIdString = result.requestId != null ? result.requestId : "NA";
+                JSONObject rulesetResultsJson = batchedResults.getOrDefault(result.requestId, new JSONObject());
 
                 Object[] excelParams = new Object[]{
                         requestIdString,
@@ -339,29 +400,31 @@ try {
                         rulesetResultsJson.toString()
                 };
 
-                // Update sheet in synchronized block
-                synchronized (sheet) {
-                    int targetRowNum = seqIdToRowNum.get(seqId);
-                    System.out.println("Writing output to file for seqId: " + seqId);
-                    Row row = sheet.getRow(targetRowNum);
-                    for (int i = 0; i < 2; i++) {  // Handle first 2 processor columns
-                        Cell cell = row.getCell(processorStartColumn + i);
-                        if (cell == null) cell = row.createCell(processorStartColumn + i);
-                        System.out.println(excelParams[i].toString());
-                        cell.setCellValue(excelParams[i].toString());
-                    }
-
-                    int currentCol = processorStartColumn + 2;
-                    currentCol = writeChunkedTextToCell(sheet, row, currentCol, rulesetResultsJson.toString(), headStyle, matchingEngine + " RULESET_RESULTS");
-                    currentCol = writeChunkedTextToCell(sheet, row, currentCol, responseString, headStyle, matchingEngine + " RESPONSE");
+                int targetRowNum = seqIdToRowNum.get(seqId);
+                System.out.println("Writing output to file for seqId: " + seqId);
+                Row row = sheet.getRow(targetRowNum);
+                for (int i = 0; i < 2; i++) {  // Handle first 2 processor columns
+                    Cell cell = row.getCell(processorStartColumn + i);
+                    if (cell == null) cell = row.createCell(processorStartColumn + i);
+                    System.out.println(excelParams[i].toString());
+                    cell.setCellValue(excelParams[i].toString());
                 }
-            }
 
-            if (responseCode > 399) {
-                failedRequestMap.put(seqId, requestBody);
+                int currentCol = processorStartColumn + 2;
+                currentCol = writeChunkedTextToCell(sheet, row, currentCol, rulesetResultsJson.toString(), headStyle, matchingEngine + " RULESET_RESULTS");
+                currentCol = writeChunkedTextToCell(sheet, row, currentCol, responseString, headStyle, matchingEngine + " RESPONSE");
             }
-            System.out.println("===========================================================================================================");
-        });
+        }
+
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
 
         return failedRequestMap;
     }
@@ -559,6 +622,95 @@ try {
             }
         }
         return results;
+    }
+
+    private static Map<String, JSONObject> fetchRuleSetResultsBatched(List<String> requestIds, String matchingEngine, String defaultCandidateType, Map<String, String> requestIdToType) {
+        Map<String, JSONObject> resultsMap = new HashMap<>();
+        if (requestIds.isEmpty()) return resultsMap;
+
+        Connection conn = null;
+        PreparedStatement pstmt = null;
+        ResultSet rs = null;
+        try {
+            conn = SQLUtilityCS.getDbConnection();
+
+            // Load properties for common pipeline override
+            Properties props = new Properties();
+            try (FileReader reader = new FileReader(ConstantsCS.CONFIG_FILE_PATH)) {
+                props.load(reader);
+            }
+
+            // Load both IND and ENT name maps
+            Map<String, String> indMap = loadRuleSetNames(conn, props.getProperty("common.ind.pipeline", "Individual Real Time Screening OSOT"));
+            Map<String, String> entMap = loadRuleSetNames(conn, props.getProperty("common.ent.pipeline", "Entity Real Time Screening OSOT"));
+
+            // Build IN clause
+            String placeholders = requestIds.stream().map(id -> "?").collect(Collectors.joining(","));
+            String query = "SELECT c_matched_result, v_ruleset_id, n_request_id FROM fcc_mr_matched_result_rt WHERE n_request_id IN (" + placeholders + ")";
+            pstmt = conn.prepareStatement(query);
+            for (int i = 0; i < requestIds.size(); i++) {
+                pstmt.setString(i + 1, requestIds.get(i));
+            }
+            rs = pstmt.executeQuery();
+
+            Map<String, JSONObject> tempResults = new HashMap<>();
+            while (rs.next()) {
+                String jsonStr = rs.getString("c_matched_result");
+                String ruleSetId = rs.getString("v_ruleset_id");
+                String requestId = rs.getString("n_request_id");
+
+                JSONObject results = tempResults.computeIfAbsent(requestId, k -> new JSONObject());
+
+                if (jsonStr != null) {
+                    JSONObject json = new JSONObject(jsonStr);
+                    JSONArray matchesArray = json.optJSONArray("matches");
+                    JSONObject ruleSetSummary = new JSONObject();
+                    ruleSetSummary.put("ruleSetId", ruleSetId);
+                    ruleSetSummary.put("matchCount", matchesArray != null ? matchesArray.length() : 0);
+                    JSONArray matchesSummary = new JSONArray();
+                    if (matchesArray != null) {
+                        for (int i = 0; i < matchesArray.length(); i++) {
+                            JSONObject match = matchesArray.getJSONObject(i);
+                            JSONObject matchSum = new JSONObject();
+                            matchSum.put("finalScore", match.optDouble("finalScore", 0.0));
+                            matchSum.put("ruleId", match.optLong("ruleId", 0));
+                            matchSum.put("indexName", match.optString("indexName", "NA"));
+                            matchSum.put("n_uid", match.optString("targetAttributeKey", "NA"));
+                            JSONArray matchedCols = new JSONArray();
+                            JSONArray matchCols = match.optJSONArray("matchCols");
+                            if (matchCols != null) {
+                                for (int j = 0; j < matchCols.length(); j++) {
+                                    matchedCols.put(matchCols.getJSONObject(j).optString("colName"));
+                                }
+                            }
+                            matchSum.put("matchedCols", matchedCols);
+                            matchSum.put("ruleName", match.optString("ruleName", "NA"));
+                            matchesSummary.put(matchSum);
+                        }
+                    }
+                    ruleSetSummary.put("matches", matchesSummary);
+
+                    // Select the correct map based on request type
+                    String type = requestIdToType.getOrDefault(requestId, defaultCandidateType);
+                    Map<String, String> nameMap = "ENT".equals(type) ? entMap : indMap;
+                    String ruleSetName = nameMap.getOrDefault(ruleSetId, ruleSetId);
+                    results.put(ruleSetName, ruleSetSummary);
+                }
+            }
+
+            resultsMap.putAll(tempResults);
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            try {
+                if (rs != null) rs.close();
+                if (pstmt != null) pstmt.close();
+                if (conn != null) conn.close();
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+        }
+        return resultsMap;
     }
 
 private static int writeChunkedTextToCell(Sheet sheet, Row row, int colIdx, String content, CellStyle headStyle, String baseHeader) {
