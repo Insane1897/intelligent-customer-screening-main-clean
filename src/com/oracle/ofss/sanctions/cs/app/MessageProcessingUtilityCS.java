@@ -90,6 +90,18 @@ public class MessageProcessingUtilityCS {
             String namespace = props.getProperty(ConstantsCS.NAMESPACE);
             String transactionService = props.getProperty(ConstantsCS.TRANSACTION_SERVICE).toLowerCase();
 
+            String ofsRemoteUser = props.getProperty(ConstantsCS.OFS_REMOTE_USER, "appuser");
+            boolean appendReqId = !"N".equalsIgnoreCase(props.getProperty(ConstantsCS.APPEND_REQID_PARAM, "Y"));
+            String cookieEnvId = namespace;
+
+            int postReadTimeout = Integer.parseInt(props.getProperty(ConstantsCS.POST_READ_TIMEOUT, "120000"));
+            int getPollAttempts = Integer.parseInt(props.getProperty(ConstantsCS.GET_POLL_ATTEMPTS, "15"));
+            int getPollDelay = Integer.parseInt(props.getProperty(ConstantsCS.GET_POLL_DELAY, "7"));
+            String requestIdHeader = props.getProperty(ConstantsCS.REQUEST_ID_HEADER, "X-Request-Id");
+            int threadPoolSize = Integer.parseInt(props.getProperty(ConstantsCS.THREAD_POOL_SIZE, "50"));
+            int maxConcurrentRequests = Integer.parseInt(props.getProperty(ConstantsCS.MAX_CONCURRENT_REQUESTS, "20"));
+            int requestDelayMs = Integer.parseInt(props.getProperty(ConstantsCS.REQUEST_DELAY_MS, "100"));
+
             String executeUrl = devcorp7 + "/" + namespace + "/csxe-real-time/executeRealTime";
             String getUrlTemplate = devcorp7 + "/" + namespace + "/csxe-real-time/RTEvents/getForRequestId/";
 
@@ -167,11 +179,11 @@ public class MessageProcessingUtilityCS {
                 System.out.println("[" + sdf.format(new Date()) + "] size of seqIdToRequestMap is " + seqIdToRequestMap.size());
 
                 String candidateType = props.getProperty(ConstantsCS.CANDIDATE_TYPE, "IND");
-                Map<String, String> failedRequestMap = processRequests(seqIdToRequestMap, tokenUrl, usernm, pwd, executeUrl, getUrlTemplate, sheet, seqIdToRowNum, formatter, processorStartColumn, webServiceId, headStyle, matchingEngine, candidateType);
+                Map<String, String> failedRequestMap = processRequests(seqIdToRequestMap, tokenUrl, usernm, pwd, executeUrl, getUrlTemplate, sheet, seqIdToRowNum, formatter, processorStartColumn, webServiceId, headStyle, matchingEngine, candidateType, ofsRemoteUser, cookieEnvId, appendReqId, requestIdHeader, postReadTimeout, getPollAttempts, getPollDelay, threadPoolSize, maxConcurrentRequests, requestDelayMs);
 
                 if (!failedRequestMap.isEmpty()) {
                     System.out.println("Job is not done yet...");
-                    failedRequestMap = processRequests(failedRequestMap, tokenUrl, usernm, pwd, executeUrl, getUrlTemplate, sheet, seqIdToRowNum, formatter, processorStartColumn, webServiceId, headStyle, matchingEngine, candidateType);
+                    failedRequestMap = processRequests(failedRequestMap, tokenUrl, usernm, pwd, executeUrl, getUrlTemplate, sheet, seqIdToRowNum, formatter, processorStartColumn, webServiceId, headStyle, matchingEngine, candidateType, ofsRemoteUser, cookieEnvId, appendReqId, requestIdHeader, postReadTimeout, getPollAttempts, getPollDelay, threadPoolSize, maxConcurrentRequests, requestDelayMs);
                 }
 
                 // Auto-size all columns
@@ -201,7 +213,7 @@ public class MessageProcessingUtilityCS {
 
     }
 
-    private static RequestProcessingResult processSingleRequest(String seqId, String requestBody, String tokenUrl, String usernm, String pwd, String executeUrl, String getUrlTemplate) {
+    private static RequestProcessingResult processSingleRequest(String seqId, String requestBody, String tokenUrl, String usernm, String pwd, String executeUrl, String getUrlTemplate, String ofsRemoteUser, String cookieEnvId, boolean appendReqId, String requestIdHeader, int postReadTimeout, int getPollAttempts, int getPollDelay) {
         long startTime = System.currentTimeMillis();
         int retryCount = 0;
         int responseCode = 500;
@@ -226,27 +238,33 @@ public class MessageProcessingUtilityCS {
             synchronized (tokenLock) {
                 bearerToken = getAccessToken(tokenUrl, usernm, pwd);
             }
-            System.out.println("Access token: " + bearerToken);
+            // System.out.println("Access token: " + bearerToken);
 
             try {
                 // Step 1: POST to executeRealTime
-                URL executeResturl = createURL(executeUrl + "?reqId=" + currentRetry);
+                String postUrl = appendReqId ? executeUrl + "?reqId=" + currentRetry : executeUrl;
+                URL executeResturl = createURL(postUrl);
+                System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] Sending POST to " + postUrl + ", body length: " + requestBody.length() + ", preview: " + requestBody.substring(0, Math.min(200, requestBody.length())));
                 HttpsURLConnection executeConn = (HttpsURLConnection) executeResturl.openConnection();
                 executeConn.setRequestMethod("POST");
                 executeConn.setRequestProperty("Content-Type", "application/json");
-                executeConn.setRequestProperty("ofs_remote_user", "OFS_SRV_ACCT");
-                executeConn.setRequestProperty("accept-language", "en-US,en-U");
+                executeConn.setRequestProperty("ofs_remote_user", ofsRemoteUser);
                 executeConn.setRequestProperty("authorization", "Bearer " + bearerToken);
-                executeConn.setRequestProperty("idcs_remote_user", "appuser");
-                executeConn.setRequestProperty("locale", "en-US");
+                if (!cookieEnvId.isEmpty()) {
+                    executeConn.setRequestProperty("Cookie", "OFSEnvID=" + cookieEnvId);
+                }
                 executeConn.setHostnameVerifier((hostname, sslSession) -> true);
+                executeConn.setReadTimeout(postReadTimeout);
                 executeConn.setDoOutput(true);
                 try (OutputStream os = executeConn.getOutputStream()) {
                     os.write(requestBody.getBytes(ConstantsCS.ENCODER));
                     os.flush();
                 }
 
+                long postStart = System.currentTimeMillis();
                 responseCode = executeConn.getResponseCode();
+                long postEnd = System.currentTimeMillis();
+                System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] POST response code: " + responseCode + ", time taken: " + (postEnd - postStart) + " ms");
                 if (responseCode >= 100 && responseCode <= 399) {
                     br = new BufferedReader(new InputStreamReader(executeConn.getInputStream()));
                 } else {
@@ -259,44 +277,123 @@ public class MessageProcessingUtilityCS {
                     apiResponse.append(output);
                 }
                 br.close();
+
+                // Extract headers BEFORE disconnect
+                String headerId = executeConn.getHeaderField(requestIdHeader);
+                String location = executeConn.getHeaderField("Location");
                 executeConn.disconnect();
 
                 String postResponseStr = apiResponse.toString().trim();
+                System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] POST body received: " + postResponseStr);
+                Map<String, List<String>> headers = executeConn.getHeaderFields();
+                System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] POST headers: " + headers);
                 if (!postResponseStr.isEmpty() && postResponseStr.startsWith("{")) {
                     JSONObject executeJson = new JSONObject(postResponseStr);
                     requestId = String.valueOf(executeJson.optLong("requestId"));
+                    System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] Extracted requestId from JSON body: " + requestId);
                 } else {
-                    System.err.println("Non-JSON POST response (code " + responseCode + "): " + postResponseStr.substring(0, Math.min(200, postResponseStr.length())));
-                    requestId = null;
+                    // Fallback: check header or Location
+                    if (headerId != null && !headerId.isEmpty()) {
+                        requestId = headerId;
+                        System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] Retrieved requestId from header: " + requestId);
+                    } else if (location != null && location.matches(".*/(\\d+)$")) {
+                        requestId = location.replaceAll(".*?/(\\d+)$", "$1");
+                        System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] Retrieved requestId from Location: " + requestId);
+                    } else {
+                        System.err.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] Failed to extract requestId, setting to null");
+                        requestId = null;
+                        // Treat empty/non-JSON 200 as retryable error
+                        if (responseCode == 200 && (postResponseStr == null || postResponseStr.trim().isEmpty())) {
+                            responseCode = 503; // Service Unavailable, triggers retry
+                            System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] Empty body on 200, retrying...");
+                        }
+                    }
                 }
 
-                // Step 2: GET to getForRequestId
+                // Step 2: GET to getForRequestId with polling
                 if (requestId != null) {
-                    String getUrl = getUrlTemplate + requestId;
-                    URL getResturl = createURL(getUrl);
-                    HttpsURLConnection getConn = (HttpsURLConnection) getResturl.openConnection();
-                    getConn.setRequestMethod("GET");
-                    getConn.setRequestProperty("authorization", "Bearer " + bearerToken);
-                    getConn.setHostnameVerifier((hostname, sslSession) -> true);
+                    for (int poll = 0; poll < getPollAttempts; poll++) {
+                        if (poll == 0) System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] Starting GET polling for requestId " + requestId);
+                        if (poll > 0) {
+                            try {
+                                Thread.sleep(getPollDelay * 1000L);
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                break;
+                            }
+                            System.out.println("[" + sdf.format(new Date()) + "] Polling GET attempt " + (poll + 1) + " for requestId " + requestId);
+                        }
 
-                    responseCode = getConn.getResponseCode();
-                    if (responseCode >= 100 && responseCode <= 399) {
-                        br = new BufferedReader(new InputStreamReader(getConn.getInputStream()));
-                    } else {
-                        br = new BufferedReader(new InputStreamReader(getConn.getErrorStream()));
+                        String getUrl = getUrlTemplate + requestId;
+                        URL getResturl = createURL(getUrl);
+                        HttpsURLConnection getConn = (HttpsURLConnection) getResturl.openConnection();
+                        getConn.setRequestMethod("GET");
+                        getConn.setRequestProperty("authorization", "Bearer " + bearerToken);
+                        getConn.setRequestProperty("ofs_remote_user", ofsRemoteUser);
+                        if (!cookieEnvId.isEmpty()) {
+                            getConn.setRequestProperty("Cookie", "OFSEnvID=" + cookieEnvId);
+                        }
+                        getConn.setHostnameVerifier((hostname, sslSession) -> true);
+                        getConn.setReadTimeout(postReadTimeout);
+
+                        responseCode = getConn.getResponseCode();
+                        if (responseCode >= 100 && responseCode <= 399) {
+                            br = new BufferedReader(new InputStreamReader(getConn.getInputStream()));
+                        } else {
+                            br = new BufferedReader(new InputStreamReader(getConn.getErrorStream()));
+                        }
+
+                        apiResponse = new StringBuilder();
+                        while ((output = br.readLine()) != null) {
+                            apiResponse.append(output);
+                        }
+                        br.close();
+                        getConn.disconnect();
+
+                        String getResponseStr = apiResponse.toString().trim();
+                        if (!getResponseStr.isEmpty()) {
+                            // Tolerant parsing
+                            JSONObject root = null;
+                            try {
+                                if (getResponseStr.startsWith("{")) {
+                                    root = new JSONObject(getResponseStr);
+                                } else if (getResponseStr.startsWith("[")) {
+                                    JSONArray arr = new JSONArray(getResponseStr);
+                                    if (arr.length() > 0) {
+                                        Object first = arr.get(0);
+                                        if (first instanceof JSONObject) {
+                                            root = (JSONObject) first;  // [{…}]
+                                        } else if (first instanceof JSONArray) {
+                                            JSONArray innerArr = (JSONArray) first;
+                                            if (innerArr.length() > 0 && innerArr.get(0) instanceof JSONObject) {
+                                                root = innerArr.getJSONObject(0);  // [[{…}]]
+                                            } else if (innerArr.length() > 0 && innerArr.get(0) instanceof String) {
+                                                String message = innerArr.getString(0);
+                                                if ("NO MATCHES FOUND".equals(message)) {
+                                                    fullResponse = getResponseStr;
+                                                    System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] No matches found for requestId " + requestId + ", accepting response");
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } catch (Exception e) {
+                                System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] Error parsing GET response for requestId " + requestId + ": " + e.getMessage() + ", response snippet: " + getResponseStr.substring(0, Math.min(200, getResponseStr.length())));
+                            }
+                            if (root != null) {
+                                fullResponse = getResponseStr;
+                                System.out.println("[" + sdf.format(new Date()) + "] Successfully received response for requestId " + requestId);
+                                break;
+                            } else {
+                                System.out.println("[" + sdf.format(new Date()) + "] GET response invalid or unparsable for requestId " + requestId + ", response snippet: " + getResponseStr.substring(0, Math.min(200, getResponseStr.length())) + ", retrying...");
+                            }
+                        } else {
+                            System.out.println("[" + sdf.format(new Date()) + "] GET response empty for requestId " + requestId + ", retrying...");
+                        }
                     }
-
-                    apiResponse = new StringBuilder();
-                    while ((output = br.readLine()) != null) {
-                        apiResponse.append(output);
-                    }
-                    br.close();
-                    getConn.disconnect();
-
-                    String getResponseStr = apiResponse.toString().trim();
-                    fullResponse = getResponseStr;
-                    if (!getResponseStr.isEmpty() && !getResponseStr.startsWith("{")) {
-                        System.err.println("Non-JSON GET response (code " + responseCode + "): " + getResponseStr.substring(0, Math.min(200, getResponseStr.length())));
+                    if (fullResponse == null) {
+                        System.err.println("[" + sdf.format(new Date()) + "] Failed to get response after " + getPollAttempts + " polls for requestId " + requestId);
                     }
                 } else {
                     fullResponse = null;
@@ -330,10 +427,8 @@ public class MessageProcessingUtilityCS {
         return new RequestProcessingResult(seqId, requestId, fullResponse, responseCode, failed, detectedCandType);
     }
 
-    private static Map<String, String> processRequests(Map<String, String> seqIdToRequestMap, String tokenUrl, String usernm, String pwd, String executeUrl, String getUrlTemplate, Sheet sheet, Map<String, Integer> seqIdToRowNum, DataFormatter formatter, int processorStartColumn, String webServiceId, CellStyle headStyle, String matchingEngine, String candidateType) {
+    private static Map<String, String> processRequests(Map<String, String> seqIdToRequestMap, String tokenUrl, String usernm, String pwd, String executeUrl, String getUrlTemplate, Sheet sheet, Map<String, Integer> seqIdToRowNum, DataFormatter formatter, int processorStartColumn, String webServiceId, CellStyle headStyle, String matchingEngine, String candidateType, String ofsRemoteUser, String cookieEnvId, boolean appendReqId, String requestIdHeader, int postReadTimeout, int getPollAttempts, int getPollDelay, int threadPoolSize, int maxConcurrentRequests, int requestDelayMs) {
         Map<String, String> failedRequestMap = new ConcurrentHashMap<>();
-        int threadPoolSize = 50; // Configurable thread pool size
-        int maxConcurrentRequests = 30; // Rate limiting
 
         ExecutorService executor = Executors.newFixedThreadPool(threadPoolSize);
         Semaphore rateLimiter = new Semaphore(maxConcurrentRequests);
@@ -347,7 +442,8 @@ public class MessageProcessingUtilityCS {
             CompletableFuture<RequestProcessingResult> future = CompletableFuture.supplyAsync(() -> {
                 try {
                     rateLimiter.acquire();
-                    return processSingleRequest(seqId, requestBody, tokenUrl, usernm, pwd, executeUrl, getUrlTemplate);
+                    Thread.sleep(requestDelayMs);
+                    return processSingleRequest(seqId, requestBody, tokenUrl, usernm, pwd, executeUrl, getUrlTemplate, ofsRemoteUser, cookieEnvId, appendReqId, requestIdHeader, postReadTimeout, getPollAttempts, getPollDelay);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     return new RequestProcessingResult(seqId, null, null, 500, true, "UNKNOWN");
@@ -629,8 +725,6 @@ public class MessageProcessingUtilityCS {
         if (requestIds.isEmpty()) return resultsMap;
 
         Connection conn = null;
-        PreparedStatement pstmt = null;
-        ResultSet rs = null;
         try {
             conn = SQLUtilityCS.getDbConnection();
 
@@ -644,16 +738,43 @@ public class MessageProcessingUtilityCS {
             Map<String, String> indMap = loadRuleSetNames(conn, props.getProperty("common.ind.pipeline", "Individual Real Time Screening OSOT"));
             Map<String, String> entMap = loadRuleSetNames(conn, props.getProperty("common.ent.pipeline", "Entity Real Time Screening OSOT"));
 
-            // Build IN clause
-            String placeholders = requestIds.stream().map(id -> "?").collect(Collectors.joining(","));
+            Map<String, JSONObject> tempResults = new HashMap<>();
+            int chunkSize = 500;
+            if (requestIds.size() > chunkSize) {
+                for (int i = 0; i < requestIds.size(); i += chunkSize) {
+                    List<String> chunk = requestIds.subList(i, Math.min(i + chunkSize, requestIds.size()));
+                    processChunk(chunk, conn, indMap, entMap, defaultCandidateType, requestIdToType, tempResults);
+                }
+            } else {
+                processChunk(requestIds, conn, indMap, entMap, defaultCandidateType, requestIdToType, tempResults);
+            }
+
+            resultsMap.putAll(tempResults);
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            try {
+                if (conn != null) conn.close();
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+        }
+        return resultsMap;
+    }
+
+    private static void processChunk(List<String> chunk, Connection conn, Map<String, String> indMap, Map<String, String> entMap, String defaultCandidateType, Map<String, String> requestIdToType, Map<String, JSONObject> tempResults) throws SQLException {
+        PreparedStatement pstmt = null;
+        ResultSet rs = null;
+        try {
+            // Build IN clause for chunk
+            String placeholders = chunk.stream().map(id -> "?").collect(Collectors.joining(","));
             String query = "SELECT c_matched_result, v_ruleset_id, n_request_id FROM fcc_mr_matched_result_rt WHERE n_request_id IN (" + placeholders + ")";
             pstmt = conn.prepareStatement(query);
-            for (int i = 0; i < requestIds.size(); i++) {
-                pstmt.setString(i + 1, requestIds.get(i));
+            for (int i = 0; i < chunk.size(); i++) {
+                pstmt.setString(i + 1, chunk.get(i));
             }
             rs = pstmt.executeQuery();
 
-            Map<String, JSONObject> tempResults = new HashMap<>();
             while (rs.next()) {
                 String jsonStr = rs.getString("c_matched_result");
                 String ruleSetId = rs.getString("v_ruleset_id");
@@ -697,20 +818,10 @@ public class MessageProcessingUtilityCS {
                     results.put(ruleSetName, ruleSetSummary);
                 }
             }
-
-            resultsMap.putAll(tempResults);
-        } catch (Exception e) {
-            e.printStackTrace();
         } finally {
-            try {
-                if (rs != null) rs.close();
-                if (pstmt != null) pstmt.close();
-                if (conn != null) conn.close();
-            } catch (SQLException e) {
-                e.printStackTrace();
-            }
+            if (rs != null) rs.close();
+            if (pstmt != null) pstmt.close();
         }
-        return resultsMap;
     }
 
 private static int writeChunkedTextToCell(Sheet sheet, Row row, int colIdx, String content, CellStyle headStyle, String baseHeader) {

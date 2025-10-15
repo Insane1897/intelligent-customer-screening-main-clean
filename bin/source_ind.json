@@ -1,5 +1,5 @@
 {
-    "requestedBy": "null",
+    "requestedBy": "UtilityUser",
     "requestJson": {
         "Candidate": [
             {
@@ -14,12 +14,12 @@
                 "Full Name": "__FULL_NAME__",
                 "Alias": [],
                 "Date Of Birth": "",
-                "Year Of Birth": 0,
+                "Year Of Birth": "",
                 "SSN/TIN": "",
                 "Gender": "",
                 "Primary Citizenship": [],
                 "Secondary Citizenship": [],
-                "Country Of Birth": "AL",
+                "Country Of Birth": "",
                 "Country Of Residence": [],
                 "Existing Internal ID": "",
                 "Address": [

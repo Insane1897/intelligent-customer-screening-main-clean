@@ -185,4 +185,19 @@ public class ConstantsCS {
     public static String VARIATION_TOKEN_ENT = "variationtoken.ent";
     public static String COMBINE_VARIATIONS_IND = "combinevariations.ind";
     public static String COMBINE_VARIATIONS_ENT = "combinevariations.ent";
+
+    // New for OT engine fixes
+    public static final String OFS_REMOTE_USER = "msgPosting.ofsRemoteUser";
+    public static final String APPEND_REQID_PARAM = "msgPosting.appendReqIdParam";
+
+    // New for robustness
+    public static final String REQUEST_ID_HEADER = "msgPosting.requestIdHeader";
+    public static final String POST_READ_TIMEOUT = "msgPosting.postReadTimeoutMillis";
+    public static final String GET_POLL_ATTEMPTS = "msgPosting.getPollAttempts";
+    public static final String GET_POLL_DELAY = "msgPosting.getPollDelaySeconds";
+
+    // New for performance scaling
+    public static final String THREAD_POOL_SIZE = "msgPosting.threadPoolSize";
+    public static final String MAX_CONCURRENT_REQUESTS = "msgPosting.maxConcurrentRequests";
+    public static final String REQUEST_DELAY_MS = "msgPosting.requestDelayMs";
 }
