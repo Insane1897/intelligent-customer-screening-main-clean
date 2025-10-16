@@ -172,6 +172,7 @@ public class RawMessageGeneratorCS {
                 processCandidateType(candidateType, watchlistTypes, props, connection, messages, tagName, webserviceId, maxIndStopwords, maxEntStopwords);
             }
 
+            System.out.println("Total raw messages generated: " + messages.size());
             writeJsonAsExcelFile(messages, props.getProperty(ConstantsCS.TRANSACTION_SERVICE), tagName, props.getProperty(ConstantsCS.WEBSERVICE), candidateType);
             writeRawMessagesToJsonFile(messages);
         } catch (Exception e) {

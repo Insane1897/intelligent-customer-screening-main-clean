@@ -225,12 +225,13 @@ public class MessageProcessingUtilityCS {
         System.out.println("[" + sdf.format(new Date()) + "] Executing REST call with SeqId: " + seqId);
         do {
             if (retryCount > 0) {
+                long delay = 5000L * (1 << Math.min(retryCount - 1, 3)); // Exponential backoff: 5s, 10s, 20s, 40s...
                 try {
-                    Thread.sleep(5000);
+                    Thread.sleep(delay);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                 }
-                System.out.println("[" + sdf.format(new Date()) + "] Waiting for REST call to complete...");
+                System.out.println("[" + sdf.format(new Date()) + "] Retry " + retryCount + " for SeqId: " + seqId + ", waiting " + delay + " ms...");
             }
             int currentRetry = retryRequestNumber.incrementAndGet();
 
@@ -248,6 +249,7 @@ public class MessageProcessingUtilityCS {
                 HttpsURLConnection executeConn = (HttpsURLConnection) executeResturl.openConnection();
                 executeConn.setRequestMethod("POST");
                 executeConn.setRequestProperty("Content-Type", "application/json");
+                executeConn.setRequestProperty("Accept", "application/json");
                 executeConn.setRequestProperty("ofs_remote_user", ofsRemoteUser);
                 executeConn.setRequestProperty("authorization", "Bearer " + bearerToken);
                 if (!cookieEnvId.isEmpty()) {
@@ -284,9 +286,9 @@ public class MessageProcessingUtilityCS {
                 executeConn.disconnect();
 
                 String postResponseStr = apiResponse.toString().trim();
-                System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] POST body received: " + postResponseStr);
+                // System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] POST body received: " + postResponseStr);
                 Map<String, List<String>> headers = executeConn.getHeaderFields();
-                System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] POST headers: " + headers);
+                // System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] POST headers: " + headers);
                 if (!postResponseStr.isEmpty() && postResponseStr.startsWith("{")) {
                     JSONObject executeJson = new JSONObject(postResponseStr);
                     requestId = String.valueOf(executeJson.optLong("requestId"));
@@ -739,7 +741,7 @@ public class MessageProcessingUtilityCS {
             Map<String, String> entMap = loadRuleSetNames(conn, props.getProperty("common.ent.pipeline", "Entity Real Time Screening OSOT"));
 
             Map<String, JSONObject> tempResults = new HashMap<>();
-            int chunkSize = 500;
+            int chunkSize = 1000;
             if (requestIds.size() > chunkSize) {
                 for (int i = 0; i < requestIds.size(); i += chunkSize) {
                     List<String> chunk = requestIds.subList(i, Math.min(i + chunkSize, requestIds.size()));
