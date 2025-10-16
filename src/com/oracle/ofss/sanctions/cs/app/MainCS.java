@@ -46,7 +46,13 @@ public class MainCS {
             // Check if analysis is required after toggle
             String analyzeAfterToggle = props.getProperty(ConstantsCS.ANALYZE_AFTER_TOGGLE, "Y");
             if ("Y".equalsIgnoreCase(analyzeAfterToggle)) {
-                MessageResponseAnalyzerCS.compareResultsAndUpdateExcel();
+                // In-memory comparison if enabled, else Excel-based
+                String analyzeInProcessing = props.getProperty(ConstantsCS.ANALYZE_IN_PROCESSING, "N");
+                if ("Y".equalsIgnoreCase(analyzeInProcessing)) {
+                    MessageProcessingUtilityCS.compareInMemory();
+                } else {
+                    MessageResponseAnalyzerCS.compareResultsAndUpdateExcel();
+                }
             }
         }
 

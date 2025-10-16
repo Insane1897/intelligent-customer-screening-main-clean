@@ -45,6 +45,32 @@ public class MessageProcessingUtilityCS {
     private static SimpleDateFormat sdf = new SimpleDateFormat(ConstantsCS.DATE_FORMAT);
     private static final AtomicInteger retryRequestNumber = new AtomicInteger(0);
 
+    // Static maps for in-processing analysis
+    private static Map<String, AnalysisMetrics> osMetrics = new HashMap<>();
+    private static Map<String, AnalysisMetrics> otMetrics = new HashMap<>();
+    private static Map<String, RowContext> seqIdToContext = new HashMap<>();
+    private static int truncatedCount = 0;
+
+    private static class RowContext {
+        String watchlist;
+        String n_uid;
+        String targetColumn;
+
+        RowContext(String watchlist, String n_uid, String targetColumn) {
+            this.watchlist = watchlist;
+            this.n_uid = n_uid;
+            this.targetColumn = targetColumn;
+        }
+    }
+
+    private static class AnalysisMetrics {
+        int[] categories = new int[4]; // SAN, PEP, EDD, PRB
+        int total = 0;
+        boolean pass = false;
+        String statusReason = "";
+        List<AnalysisUtil.MatchObject> matches = new ArrayList<>();
+    }
+
     private static class RequestProcessingResult {
         String seqId;
         String requestId;
@@ -131,6 +157,37 @@ public class MessageProcessingUtilityCS {
                  Workbook workbook = new XSSFWorkbook(fis)) {
                 Sheet sheet = workbook.getSheetAt(0);
 
+                // Set current metrics map
+                Map<String, AnalysisMetrics> currentEngineMetrics = matchingEngine.equals("OS") ? osMetrics : otMetrics;
+
+                // Read Excel once for context if analyzeInProcessing=Y
+                boolean analyzeInProcessing = "Y".equalsIgnoreCase(props.getProperty(ConstantsCS.ANALYZE_IN_PROCESSING, "N"));
+                if (analyzeInProcessing) {
+                    Iterator<Row> readIterator = sheet.iterator();
+                    DataFormatter formatter = new DataFormatter();
+                    int readRowNumber = 0;
+                    while (readIterator.hasNext()) {
+                        Row row = readIterator.next();
+                        if (readRowNumber == 0) {
+                            ++readRowNumber;
+                            continue;
+                        }
+                        Cell seqCell = row.getCell(0);
+                        Cell watchlistCell = row.getCell(6); // Watchlist
+                        Cell nuidCell = row.getCell(7);     // N_UID
+                        Cell targetColumnCell = row.getCell(5); // Target Column
+                        if (seqCell != null && watchlistCell != null && nuidCell != null && targetColumnCell != null) {
+                            String seqId = formatter.formatCellValue(seqCell);
+                            seqIdToContext.put(seqId, new RowContext(
+                                formatter.formatCellValue(watchlistCell),
+                                formatter.formatCellValue(nuidCell),
+                                formatter.formatCellValue(targetColumnCell)
+                            ));
+                        }
+                    }
+                    System.out.println("[" + sdf.format(new Date()) + "] Loaded seqIdToContext for " + seqIdToContext.size() + " rows");
+                }
+
                 // Dynamically add processor columns
                 Row headerRow = sheet.getRow(0);
                 if (headerRow == null) headerRow = sheet.createRow(0);
@@ -153,6 +210,28 @@ public class MessageProcessingUtilityCS {
                     if (headerCell == null) headerCell = headerRow.createCell(processorStartColumn + i);
                     headerCell.setCellValue(processorHeaders[i]);
                     headerCell.setCellStyle(headStyle);
+                }
+
+                // Add analysis columns if analyzeInProcessing=Y
+                if (analyzeInProcessing) {
+                    int analysisStartColumn = processorStartColumn + 2;
+                    String[] analysisHeaders = {
+                            matchingEngine + " RULESET_RESULTS",
+                            matchingEngine + " RESPONSE",
+                            matchingEngine + "_SAN_MATCH",
+                            matchingEngine + "_PEP_MATCH",
+                            matchingEngine + "_EDD_MATCH",
+                            matchingEngine + "_PRB_MATCH",
+                            matchingEngine + "_MATCH_COUNT",
+                            matchingEngine + " Status"
+                    };
+                    for (int i = 0; i < analysisHeaders.length; i++) {
+                        Cell headerCell = headerRow.getCell(analysisStartColumn + i);
+                        if (headerCell == null) headerCell = headerRow.createCell(analysisStartColumn + i);
+                        headerCell.setCellValue(analysisHeaders[i]);
+                        headerCell.setCellStyle(headStyle);
+                    }
+                    System.out.println("[" + sdf.format(new Date()) + "] Added analysis columns starting at col " + analysisStartColumn);
                 }
 
                 Iterator<Row> rowIterator = sheet.iterator();
@@ -179,11 +258,11 @@ public class MessageProcessingUtilityCS {
                 System.out.println("[" + sdf.format(new Date()) + "] size of seqIdToRequestMap is " + seqIdToRequestMap.size());
 
                 String candidateType = props.getProperty(ConstantsCS.CANDIDATE_TYPE, "IND");
-                Map<String, String> failedRequestMap = processRequests(seqIdToRequestMap, tokenUrl, usernm, pwd, executeUrl, getUrlTemplate, sheet, seqIdToRowNum, formatter, processorStartColumn, webServiceId, headStyle, matchingEngine, candidateType, ofsRemoteUser, cookieEnvId, appendReqId, requestIdHeader, postReadTimeout, getPollAttempts, getPollDelay, threadPoolSize, maxConcurrentRequests, requestDelayMs);
+                Map<String, String> failedRequestMap = processRequests(seqIdToRequestMap, tokenUrl, usernm, pwd, executeUrl, getUrlTemplate, sheet, seqIdToRowNum, formatter, processorStartColumn, webServiceId, headStyle, matchingEngine, candidateType, ofsRemoteUser, cookieEnvId, appendReqId, requestIdHeader, postReadTimeout, getPollAttempts, getPollDelay, threadPoolSize, maxConcurrentRequests, requestDelayMs, analyzeInProcessing, currentEngineMetrics);
 
                 if (!failedRequestMap.isEmpty()) {
                     System.out.println("Job is not done yet...");
-                    failedRequestMap = processRequests(failedRequestMap, tokenUrl, usernm, pwd, executeUrl, getUrlTemplate, sheet, seqIdToRowNum, formatter, processorStartColumn, webServiceId, headStyle, matchingEngine, candidateType, ofsRemoteUser, cookieEnvId, appendReqId, requestIdHeader, postReadTimeout, getPollAttempts, getPollDelay, threadPoolSize, maxConcurrentRequests, requestDelayMs);
+                    failedRequestMap = processRequests(failedRequestMap, tokenUrl, usernm, pwd, executeUrl, getUrlTemplate, sheet, seqIdToRowNum, formatter, processorStartColumn, webServiceId, headStyle, matchingEngine, candidateType, ofsRemoteUser, cookieEnvId, appendReqId, requestIdHeader, postReadTimeout, getPollAttempts, getPollDelay, threadPoolSize, maxConcurrentRequests, requestDelayMs, analyzeInProcessing, currentEngineMetrics);
                 }
 
                 // Auto-size all columns
@@ -429,7 +508,7 @@ public class MessageProcessingUtilityCS {
         return new RequestProcessingResult(seqId, requestId, fullResponse, responseCode, failed, detectedCandType);
     }
 
-    private static Map<String, String> processRequests(Map<String, String> seqIdToRequestMap, String tokenUrl, String usernm, String pwd, String executeUrl, String getUrlTemplate, Sheet sheet, Map<String, Integer> seqIdToRowNum, DataFormatter formatter, int processorStartColumn, String webServiceId, CellStyle headStyle, String matchingEngine, String candidateType, String ofsRemoteUser, String cookieEnvId, boolean appendReqId, String requestIdHeader, int postReadTimeout, int getPollAttempts, int getPollDelay, int threadPoolSize, int maxConcurrentRequests, int requestDelayMs) {
+    private static Map<String, String> processRequests(Map<String, String> seqIdToRequestMap, String tokenUrl, String usernm, String pwd, String executeUrl, String getUrlTemplate, Sheet sheet, Map<String, Integer> seqIdToRowNum, DataFormatter formatter, int processorStartColumn, String webServiceId, CellStyle headStyle, String matchingEngine, String candidateType, String ofsRemoteUser, String cookieEnvId, boolean appendReqId, String requestIdHeader, int postReadTimeout, int getPollAttempts, int getPollDelay, int threadPoolSize, int maxConcurrentRequests, int requestDelayMs, boolean analyzeInProcessing, Map<String, AnalysisMetrics> currentEngineMetrics) {
         Map<String, String> failedRequestMap = new ConcurrentHashMap<>();
 
         ExecutorService executor = Executors.newFixedThreadPool(threadPoolSize);
@@ -480,6 +559,31 @@ public class MessageProcessingUtilityCS {
         // Batch DB query for all successful requestIds
         Map<String, JSONObject> batchedResults = fetchRuleSetResultsBatched(successfulRequestIds, matchingEngine, candidateType, requestIdToType);
 
+        // Compute metrics if analyzeInProcessing=Y
+        if (analyzeInProcessing) {
+            for (Map.Entry<String, RequestProcessingResult> entry : resultsBySeqId.entrySet()) {
+                String seqId = entry.getKey();
+                RequestProcessingResult result = entry.getValue();
+                if (result.failed || result.requestId == null) continue;
+
+                JSONObject rulesetJson = batchedResults.get(result.requestId);
+                if (rulesetJson == null) continue;
+
+                RowContext ctx = seqIdToContext.get(seqId);
+                if (ctx == null) continue;
+
+                AnalysisMetrics metrics = new AnalysisMetrics();
+                metrics.categories = AnalysisUtil.categorizeMatchCounts(rulesetJson.toString());
+                metrics.total = AnalysisUtil.sumMatchCount(rulesetJson);
+                metrics.pass = AnalysisUtil.checkMatch(rulesetJson.toString(), ctx.watchlist, ctx.n_uid, ctx.targetColumn, matchingEngine);
+                metrics.statusReason = metrics.pass ? "Pass" : "Fail";
+                metrics.matches = AnalysisUtil.parseToMatches(rulesetJson.toString(), matchingEngine).matchesByType.values().stream()
+                    .flatMap(List::stream).collect(java.util.stream.Collectors.toList());
+
+                currentEngineMetrics.put(seqId, metrics);
+            }
+        }
+
         // Update Excel in a single pass
         synchronized (sheet) {
             for (Map.Entry<String, RequestProcessingResult> entry : resultsBySeqId.entrySet()) {
@@ -490,27 +594,88 @@ public class MessageProcessingUtilityCS {
                 String responseString = result.fullResponse != null ? result.fullResponse : "NA";
                 String requestIdString = result.requestId != null ? result.requestId : "NA";
                 JSONObject rulesetResultsJson = batchedResults.getOrDefault(result.requestId, new JSONObject());
-
-                Object[] excelParams = new Object[]{
-                        requestIdString,
-                        "NA",  // Placeholder for CASE_ID
-                        responseString,
-                        rulesetResultsJson.toString()
-                };
+                String rulesetString = rulesetResultsJson.toString();
 
                 int targetRowNum = seqIdToRowNum.get(seqId);
                 System.out.println("Writing output to file for seqId: " + seqId);
                 Row row = sheet.getRow(targetRowNum);
-                for (int i = 0; i < 2; i++) {  // Handle first 2 processor columns
-                    Cell cell = row.getCell(processorStartColumn + i);
-                    if (cell == null) cell = row.createCell(processorStartColumn + i);
-                    System.out.println(excelParams[i].toString());
-                    cell.setCellValue(excelParams[i].toString());
-                }
+
+                // Write processor columns
+                Cell cell0 = row.getCell(processorStartColumn);
+                if (cell0 == null) cell0 = row.createCell(processorStartColumn);
+                cell0.setCellValue(requestIdString);
+                Cell cell1 = row.getCell(processorStartColumn + 1);
+                if (cell1 == null) cell1 = row.createCell(processorStartColumn + 1);
+                cell1.setCellValue("NA");  // CASE_ID
 
                 int currentCol = processorStartColumn + 2;
-                currentCol = writeChunkedTextToCell(sheet, row, currentCol, rulesetResultsJson.toString(), headStyle, matchingEngine + " RULESET_RESULTS");
-                currentCol = writeChunkedTextToCell(sheet, row, currentCol, responseString, headStyle, matchingEngine + " RESPONSE");
+
+                // Handle RULESET_RESULTS with truncation and file saving
+                String rulesetContent = rulesetString;
+                if (rulesetContent.length() > ConstantsCS.MAX_MSG_LEN) {
+                    truncatedCount++;
+                    String subfolder = "truncated_jsons";
+                    try {
+                        java.nio.file.Path subPath = java.nio.file.Paths.get(ConstantsCS.OUTPUT_FOLDER.getPath(), subfolder);
+                        if (!java.nio.file.Files.exists(subPath)) {
+                            java.nio.file.Files.createDirectories(subPath);
+                        }
+                        String fileName = matchingEngine + "_full_" + seqId + ".json";
+                        java.nio.file.Path fullPath = java.nio.file.Paths.get(subPath.toString(), fileName);
+                        java.nio.file.Files.write(fullPath, rulesetContent.getBytes(ConstantsCS.ENCODER));
+                        rulesetContent = "TRUNCATED (see " + subfolder + "/" + fileName + "): Total=" + (currentEngineMetrics.get(seqId) != null ? currentEngineMetrics.get(seqId).total : 0);
+                    } catch (Exception e) {
+                        rulesetContent = "[response exceeds " + ConstantsCS.MAX_MSG_LEN + " chars and file save failed]";
+                    }
+                }
+                currentCol = writeChunkedTextToCell(sheet, row, currentCol, rulesetContent, headStyle, matchingEngine + " RULESET_RESULTS");
+
+                // Handle RESPONSE with truncation and file saving
+                String responseContent = responseString;
+                if (responseContent.length() > ConstantsCS.MAX_MSG_LEN) {
+                    truncatedCount++;
+                    String subfolder = "truncated_jsons";
+                    try {
+                        java.nio.file.Path subPath = java.nio.file.Paths.get(ConstantsCS.OUTPUT_FOLDER.getPath(), subfolder);
+                        if (!java.nio.file.Files.exists(subPath)) {
+                            java.nio.file.Files.createDirectories(subPath);
+                        }
+                        String fileName = matchingEngine + "_response_full_" + seqId + ".json";
+                        java.nio.file.Path fullPath = java.nio.file.Paths.get(subPath.toString(), fileName);
+                        java.nio.file.Files.write(fullPath, responseContent.getBytes(ConstantsCS.ENCODER));
+                        responseContent = "TRUNCATED (see " + subfolder + "/" + fileName + ")";
+                    } catch (Exception e) {
+                        responseContent = "[response exceeds " + ConstantsCS.MAX_MSG_LEN + " chars and file save failed]";
+                    }
+                }
+                currentCol = writeChunkedTextToCell(sheet, row, currentCol, responseContent, headStyle, matchingEngine + " RESPONSE");
+
+                // Write analysis metrics if computed
+                if (analyzeInProcessing) {
+                    AnalysisMetrics metrics = currentEngineMetrics.get(seqId);
+                    if (metrics != null) {
+                        row.createCell(currentCol++).setCellValue(metrics.categories[0]); // SAN
+                        row.createCell(currentCol++).setCellValue(metrics.categories[1]); // PEP
+                        row.createCell(currentCol++).setCellValue(metrics.categories[2]); // EDD
+                        row.createCell(currentCol++).setCellValue(metrics.categories[3]); // PRB
+                        row.createCell(currentCol++).setCellValue(metrics.total); // MATCH_COUNT
+                        Cell statusCell = row.createCell(currentCol++);
+                        statusCell.setCellValue(metrics.statusReason);
+                        // Set color
+                        org.apache.poi.ss.usermodel.CellStyle style = sheet.getWorkbook().createCellStyle();
+                        org.apache.poi.xssf.usermodel.XSSFCellStyle xssfStyle = (org.apache.poi.xssf.usermodel.XSSFCellStyle) style;
+                        if (metrics.pass) {
+                            xssfStyle.setFillForegroundColor(new org.apache.poi.xssf.usermodel.XSSFColor(new byte[]{(byte)144, (byte)238, (byte)144}, null));
+                        } else {
+                            xssfStyle.setFillForegroundColor(new org.apache.poi.xssf.usermodel.XSSFColor(new byte[]{(byte)255, (byte)182, (byte)193}, null));
+                        }
+                        style.setFillPattern(org.apache.poi.ss.usermodel.FillPatternType.SOLID_FOREGROUND);
+                        statusCell.setCellStyle(style);
+                    }
+                }
+            }
+            if (truncatedCount > 0) {
+                System.out.println("[" + sdf.format(new Date()) + "] Truncated " + truncatedCount + " oversized responses, full JSON saved to files in " + ConstantsCS.OUTPUT_FOLDER.getPath() + "/truncated_jsons");
             }
         }
 
@@ -888,5 +1053,194 @@ private static int writeChunkedTextToCell(Sheet sheet, Row row, int colIdx, Stri
                 break;
         }
         return msg;
+    }
+
+    public static void compareInMemory() throws Exception {
+        Properties props = new Properties();
+        try (FileReader reader = new FileReader(ConstantsCS.CONFIG_FILE_PATH)) {
+            props.load(reader);
+        }
+
+        if (!"Y".equalsIgnoreCase(props.getProperty(ConstantsCS.ANALYZE_IN_PROCESSING, "N"))) {
+            System.out.println("In-processing analysis disabled, skipping in-memory comparison.");
+            return;
+        }
+
+        System.out.println("\n=============================================================");
+        System.out.println("              COMPARING OS VS OT RESULTS IN MEMORY            ");
+        System.out.println("=============================================================");
+
+        try (FileInputStream fis = new FileInputStream(ConstantsCS.OUTPUT_XLSX_FILE_PATH);
+             Workbook workbook = new XSSFWorkbook(fis)) {
+            Sheet sheet = workbook.getSheetAt(0);
+
+            // Find column indices for OS/OT analysis columns
+            Row headerRow = sheet.getRow(0);
+            int osSanCol = -1, osPepCol = -1, osEddCol = -1, osPrbCol = -1, osTotalCol = -1, osStatusCol = -1;
+            int otSanCol = -1, otPepCol = -1, otEddCol = -1, otPrbCol = -1, otTotalCol = -1, otStatusCol = -1;
+            int commonCol = -1, missingCol = -1, additionalCol = -1, finalStatusCol = -1;
+
+            for (int i = 0; i < headerRow.getLastCellNum(); i++) {
+                String header = headerRow.getCell(i).getStringCellValue();
+                if ("OS_SAN_MATCH".equals(header)) osSanCol = i;
+                else if ("OS_PEP_MATCH".equals(header)) osPepCol = i;
+                else if ("OS_EDD_MATCH".equals(header)) osEddCol = i;
+                else if ("OS_PRB_MATCH".equals(header)) osPrbCol = i;
+                else if ("OS_MATCH_COUNT".equals(header)) osTotalCol = i;
+                else if ("OS Status".equals(header)) osStatusCol = i;
+                else if ("OT_SAN_MATCH".equals(header)) otSanCol = i;
+                else if ("OT_PEP_MATCH".equals(header)) otPepCol = i;
+                else if ("OT_EDD_MATCH".equals(header)) otEddCol = i;
+                else if ("OT_PRB_MATCH".equals(header)) otPrbCol = i;
+                else if ("OT_MATCH_COUNT".equals(header)) otTotalCol = i;
+                else if ("OT Status".equals(header)) otStatusCol = i;
+                else if ("Common Matches".equals(header)) commonCol = i;
+                else if ("OS Missing Expected match in OT".equals(header)) missingCol = i;
+                else if ("Additional Matches in OT".equals(header)) additionalCol = i;
+                else if ("Final Status".equals(header)) finalStatusCol = i;
+            }
+
+            if (osSanCol == -1 || otSanCol == -1) {
+                System.out.println("OS/OT analysis columns not found, skipping comparison.");
+                return;
+            }
+
+            // Add missing comparison columns if needed
+            int nextCol = headerRow.getLastCellNum();
+            if (commonCol == -1) {
+                commonCol = nextCol++;
+                headerRow.createCell(commonCol).setCellValue("Common Matches");
+            }
+            if (missingCol == -1) {
+                missingCol = nextCol++;
+                headerRow.createCell(missingCol).setCellValue("OS Missing Expected match in OT");
+            }
+            if (additionalCol == -1) {
+                additionalCol = nextCol++;
+                headerRow.createCell(additionalCol).setCellValue("Additional Matches in OT");
+            }
+            if (finalStatusCol == -1) {
+                finalStatusCol = nextCol++;
+                headerRow.createCell(finalStatusCol).setCellValue("Final Status");
+            }
+
+            // Process each row
+            for (int rowIndex = 1; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+                Row row = sheet.getRow(rowIndex);
+                if (row == null) continue;
+
+                // Find seqId from first column
+                String seqId = row.getCell(0).getStringCellValue();
+
+                AnalysisMetrics osMetricsObj = osMetrics.get(seqId);
+                AnalysisMetrics otMetricsObj = otMetrics.get(seqId);
+                if (osMetricsObj == null || otMetricsObj == null) continue;
+
+                // Compare matches by type
+                Map<String, List<AnalysisUtil.MatchObject>> commonByType = new HashMap<>();
+                Map<String, List<AnalysisUtil.MatchObject>> osMissingByType = new HashMap<>();
+                Map<String, List<AnalysisUtil.MatchObject>> otAdditionalByType = new HashMap<>();
+
+                for (String type : new String[]{"SAN", "PEP", "EDD", "PRB"}) {
+                    List<AnalysisUtil.MatchObject> osList = osMetricsObj.matches.stream().filter(m -> {
+                        if ("SAN".equals(type)) return osMetricsObj.categories[0] > 0; // Placeholder, actual filter by ruleset
+                        if ("PEP".equals(type)) return osMetricsObj.categories[1] > 0;
+                        if ("EDD".equals(type)) return osMetricsObj.categories[2] > 0;
+                        if ("PRB".equals(type)) return osMetricsObj.categories[3] > 0;
+                        return false;
+                    }).collect(java.util.stream.Collectors.toList());
+                    List<AnalysisUtil.MatchObject> otList = otMetricsObj.matches.stream().filter(m -> {
+                        if ("SAN".equals(type)) return otMetricsObj.categories[0] > 0;
+                        if ("PEP".equals(type)) return otMetricsObj.categories[1] > 0;
+                        if ("EDD".equals(type)) return otMetricsObj.categories[2] > 0;
+                        if ("PRB".equals(type)) return otMetricsObj.categories[3] > 0;
+                        return false;
+                    }).collect(java.util.stream.Collectors.toList());
+
+                    List<AnalysisUtil.MatchObject> common = new ArrayList<>();
+                    List<AnalysisUtil.MatchObject> osRemaining = new ArrayList<>(osList);
+                    List<AnalysisUtil.MatchObject> otRemaining = new ArrayList<>(otList);
+
+                    for (int i = osRemaining.size() - 1; i >= 0; i--) {
+                        AnalysisUtil.MatchObject osMatch = osRemaining.get(i);
+                        int idx = otRemaining.indexOf(osMatch);
+                        if (idx != -1) {
+                            common.add(osMatch);
+                            osRemaining.remove(i);
+                            otRemaining.remove(idx);
+                        }
+                    }
+
+                    if (!common.isEmpty()) commonByType.put(type, common);
+                    if (!osRemaining.isEmpty()) osMissingByType.put(type, osRemaining);
+                    if (!otRemaining.isEmpty()) otAdditionalByType.put(type, otRemaining);
+                }
+
+                // Create JSON strings
+                JSONObject commonJson = new JSONObject();
+                for (Map.Entry<String, List<AnalysisUtil.MatchObject>> entry : commonByType.entrySet()) {
+                    JSONArray arr = new JSONArray();
+                    for (AnalysisUtil.MatchObject mo : entry.getValue()) arr.put(new JSONObject(mo.toString()));
+                    commonJson.put(entry.getKey(), arr);
+                }
+
+                JSONObject missingJson = new JSONObject();
+                for (Map.Entry<String, List<AnalysisUtil.MatchObject>> entry : osMissingByType.entrySet()) {
+                    JSONArray arr = new JSONArray();
+                    for (AnalysisUtil.MatchObject mo : entry.getValue()) arr.put(new JSONObject(mo.toString()));
+                    missingJson.put(entry.getKey(), arr);
+                }
+
+                JSONObject additionalJson = new JSONObject();
+                for (Map.Entry<String, List<AnalysisUtil.MatchObject>> entry : otAdditionalByType.entrySet()) {
+                    JSONArray arr = new JSONArray();
+                    for (AnalysisUtil.MatchObject mo : entry.getValue()) arr.put(new JSONObject(mo.toString()));
+                    additionalJson.put(entry.getKey(), arr);
+                }
+
+                // Write to columns
+                row.createCell(commonCol).setCellValue(commonJson.toString());
+                row.createCell(missingCol).setCellValue(missingJson.toString());
+                row.createCell(additionalCol).setCellValue(additionalJson.toString());
+
+                // Determine final status
+                boolean hasCommon = !commonByType.isEmpty();
+                boolean hasMissing = !osMissingByType.isEmpty();
+                boolean hasAdditional = !otAdditionalByType.isEmpty();
+
+                String status;
+                if (!hasCommon) {
+                    status = "Missing Required";
+                } else if (!hasMissing && !hasAdditional) {
+                    status = "Exact";
+                } else if (!hasMissing && hasAdditional) {
+                    status = "Exact - Additional OT Matches";
+                } else {
+                    status = "Missing Required Matches";
+                }
+
+                Cell statusCell = row.createCell(finalStatusCol);
+                statusCell.setCellValue(status);
+
+                // Set color
+                CellStyle style = workbook.createCellStyle();
+                XSSFCellStyle xssfStyle = (XSSFCellStyle) style;
+                if (status.equals("Exact") || status.equals("Exact - Additional OT Matches")) {
+                    xssfStyle.setFillForegroundColor(new XSSFColor(new byte[]{(byte)144, (byte)238, (byte)144}, null));
+                } else {
+                    xssfStyle.setFillForegroundColor(new XSSFColor(new byte[]{(byte)255, (byte)182, (byte)193}, null));
+                }
+                style.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+                statusCell.setCellStyle(style);
+            }
+
+            try (FileOutputStream fos = new FileOutputStream(ConstantsCS.OUTPUT_XLSX_FILE_PATH)) {
+                workbook.write(fos);
+            }
+        }
+
+        System.out.println("\n=============================================================");
+        System.out.println("             IN-MEMORY COMPARISON COMPLETED                  ");
+        System.out.println("=============================================================");
     }
 }

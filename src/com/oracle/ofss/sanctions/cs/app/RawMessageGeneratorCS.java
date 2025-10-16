@@ -246,8 +246,9 @@ public class RawMessageGeneratorCS {
 
     private static Map<String, String> getTokenMappings(String candidateType, Properties props) {
         Map<String, String> tokenToColumnMap = new LinkedHashMap<>();
-        int startIndex = "IND".equalsIgnoreCase(candidateType) ? 1 : 11;  // IND starts at 1, ENT at 11
-        for (int i = startIndex; ; i++) {
+        int startIndex = "IND".equalsIgnoreCase(candidateType) ? 1 : 21;  // IND starts at 1, ENT at 21
+        int endIndex = "IND".equalsIgnoreCase(candidateType) ? 20 : 40;  // Arbitrary high for ENT
+        for (int i = startIndex; i <= endIndex; i++) {
             String token = props.getProperty("replace.src[" + i + "]");
             String column = props.getProperty("replace.targetColumn[" + i + "]");
             if (token == null || column == null) break;
@@ -391,21 +392,48 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
         for (RowData row : rows) {
             String uid = asString(row.get("N_UID"));
 
-            // Build source and target column strings
+            // Validation for required fields
+            boolean isValid = false;
+            if ("IND".equalsIgnoreCase(candidateType)) {
+                String firstName = asString(row.get(tokenToColumnMap.get("__FIRST_NAME__"))).trim();
+                String lastName = asString(row.get(tokenToColumnMap.get("__LAST_NAME__"))).trim();
+                String fullName = asString(row.get(tokenToColumnMap.get("__FULL_NAME__"))).trim();
+                isValid = (!firstName.isEmpty() && !lastName.isEmpty()) || !fullName.isEmpty();
+                if (!isValid) {
+                    System.out.println("Skipping invalid IND row for UID " + uid + ": missing required names");
+                    continue;
+                }
+            } else if ("ENT".equalsIgnoreCase(candidateType)) {
+                String orgName = asString(row.get(tokenToColumnMap.get("__ORG_NAME__"))).trim();
+                isValid = !orgName.isEmpty();
+                if (!isValid) {
+                    System.out.println("Skipping invalid ENT row for UID " + uid + ": missing Org Name");
+                    continue;
+                }
+            }
+
+            // Build source input (all values)
             StringBuilder sourceInputBuilder = new StringBuilder();
-            StringBuilder targetColumnBuilder = new StringBuilder();
             for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
                 String column = entry.getValue();
                 String value = asString(row.get(column));
                 if (sourceInputBuilder.length() > 0) {
                     sourceInputBuilder.append(";");
-                    targetColumnBuilder.append(";");
                 }
                 sourceInputBuilder.append(value);
-                targetColumnBuilder.append(column);
             }
             String sourceInput = sourceInputBuilder.toString();
-            String targetColumn = targetColumnBuilder.toString();
+
+            // Build dynamic target column (only non-null columns)
+            List<String> nonNullCols = new ArrayList<>();
+            for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
+                String column = entry.getValue();
+                String value = asString(row.get(column)).trim();
+                if (!value.isEmpty()) {
+                    nonNullCols.add(column);
+                }
+            }
+            String targetColumn = String.join(";", nonNullCols);
 
             // Generate exact with all tokens replaced
             Map<String, String> exactTokenToValue = new HashMap<>();
@@ -595,25 +623,50 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
         for (RowData row : rows) {
             String uid = asString(row.get("N_UID"));
 
-            // Build source and target column strings
+            // Validation for required fields
+            boolean isValid = false;
+            if ("IND".equalsIgnoreCase(candidateType)) {
+                String firstName = asString(row.get(tokenToColumnMap.get("__FIRST_NAME__"))).trim();
+                String lastName = asString(row.get(tokenToColumnMap.get("__LAST_NAME__"))).trim();
+                String fullName = asString(row.get(tokenToColumnMap.get("__FULL_NAME__"))).trim();
+                isValid = (!firstName.isEmpty() && !lastName.isEmpty()) || !fullName.isEmpty();
+                if (!isValid) {
+                    System.out.println("Skipping invalid IND translit row for UID " + uid + ": missing required names");
+                    continue;
+                }
+            } else if ("ENT".equalsIgnoreCase(candidateType)) {
+                String orgName = asString(row.get(tokenToColumnMap.get("__ORG_NAME__"))).trim();
+                isValid = !orgName.isEmpty();
+                if (!isValid) {
+                    System.out.println("Skipping invalid ENT translit row for UID " + uid + ": missing Org Name");
+                    continue;
+                }
+            }
+
+            // Build source input (all values)
             StringBuilder sourceInputBuilder = new StringBuilder();
-            StringBuilder targetInputBuilder = new StringBuilder();
-            StringBuilder targetColumnBuilder = new StringBuilder();
             for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
-                String token = entry.getKey();
                 String column = entry.getValue();
                 String value = asString(row.get(column));
                 if (sourceInputBuilder.length() > 0) {
                     sourceInputBuilder.append(";");
-                    targetInputBuilder.append(";");
-                    targetColumnBuilder.append(";");
                 }
                 sourceInputBuilder.append(value);
-                targetInputBuilder.append(value); // Transliteration doesn't change values
-                targetColumnBuilder.append(column);
             }
             String sourceInput = sourceInputBuilder.toString();
-            String targetColumn = targetColumnBuilder.toString();
+
+            // Build dynamic target column (only non-null columns)
+            List<String> nonNullCols = new ArrayList<>();
+            for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
+                String column = entry.getValue();
+                String value = asString(row.get(column)).trim();
+                if (!value.isEmpty()) {
+                    nonNullCols.add(column);
+                }
+            }
+            String targetColumn = String.join(";", nonNullCols);
+
+            String targetInput = sourceInput; // Transliteration doesn't change values
 
             // Generate translit with all tokens replaced
             Map<String, String> tokenToValue = new HashMap<>();
@@ -622,7 +675,7 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
             }
             JSONObject json = buildJsonWithAllTokens(templateJson, tokenToValue);
             String jsonStr = json.toString();
-            addToArray(jsonStr, "TRANSLIT", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInputBuilder.toString(), targetColumn, "TRANSLIT", candidateType, 0, 0);
+            addToArray(jsonStr, "TRANSLIT", messages, seenMessages, uid, tableName, wlType, sourceInput, targetInput, targetColumn, "TRANSLIT", candidateType, 0, 0);
         }
     }
 

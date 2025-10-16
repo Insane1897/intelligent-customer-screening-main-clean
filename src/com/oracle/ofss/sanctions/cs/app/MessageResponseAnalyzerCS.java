@@ -23,7 +23,13 @@ public class MessageResponseAnalyzerCS {
             props.load(reader);
         }
 
-        ZipSecureFile.setMinInflateRatio(0.001);
+        // Skip if in-processing analysis is enabled
+        if ("Y".equalsIgnoreCase(props.getProperty(ConstantsCS.ANALYZE_IN_PROCESSING, "N"))) {
+            System.out.println("In-processing analysis enabled, skipping Excel-based analysis for " + engine);
+            return;
+        }
+
+        ZipSecureFile.setMinInflateRatio(0.005f);
         try (FileInputStream fis = new FileInputStream(ConstantsCS.OUTPUT_XLSX_FILE_PATH);
              Workbook workbook = new XSSFWorkbook(fis)) {
 

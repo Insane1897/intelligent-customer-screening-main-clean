@@ -200,4 +200,8 @@ public class ConstantsCS {
     public static final String THREAD_POOL_SIZE = "msgPosting.threadPoolSize";
     public static final String MAX_CONCURRENT_REQUESTS = "msgPosting.maxConcurrentRequests";
     public static final String REQUEST_DELAY_MS = "msgPosting.requestDelayMs";
+
+    // New for in-processing analysis
+    public static final String ANALYZE_IN_PROCESSING = "analyzeInProcessing";
+    public static final String SAVE_FULL_JSON_ON_TRUNCATE = "saveFullJsonOnTruncate";
 }
