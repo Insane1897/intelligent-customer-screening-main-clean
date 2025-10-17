@@ -325,6 +325,10 @@ public class MessageProcessingUtilityCS {
                 String postUrl = appendReqId ? executeUrl + "?reqId=" + currentRetry : executeUrl;
                 URL executeResturl = createURL(postUrl);
                 System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] Sending POST to " + postUrl + ", body length: " + requestBody.length() + ", preview: " + requestBody.substring(0, Math.min(200, requestBody.length())));
+                // Log full body on 500 for debugging
+                if (retryCount > 0) {
+                    System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] Full POST body: " + requestBody);
+                }
                 HttpsURLConnection executeConn = (HttpsURLConnection) executeResturl.openConnection();
                 executeConn.setRequestMethod("POST");
                 executeConn.setRequestProperty("Content-Type", "application/json");
@@ -365,6 +369,10 @@ public class MessageProcessingUtilityCS {
                 executeConn.disconnect();
 
                 String postResponseStr = apiResponse.toString().trim();
+                // Log full response on 500 for debugging
+                if (responseCode == 500) {
+                    System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] Full POST response body on 500: " + postResponseStr);
+                }
                 // System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] POST body received: " + postResponseStr);
                 Map<String, List<String>> headers = executeConn.getHeaderFields();
                 // System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] POST headers: " + headers);
