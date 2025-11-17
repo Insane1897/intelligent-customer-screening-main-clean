@@ -1132,13 +1132,15 @@ private static int writeChunkedTextToCell(Sheet sheet, Row row, int colIdx, Stri
                 headerRow.createCell(finalStatusCol).setCellValue("Final Status");
             }
 
+            DataFormatter formatter = new DataFormatter();
+
             // Process each row
             for (int rowIndex = 1; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
                 Row row = sheet.getRow(rowIndex);
                 if (row == null) continue;
 
                 // Find seqId from first column
-                String seqId = row.getCell(0).getStringCellValue();
+                String seqId = formatter.formatCellValue(row.getCell(0));
 
                 AnalysisMetrics osMetricsObj = osMetrics.get(seqId);
                 AnalysisMetrics otMetricsObj = otMetrics.get(seqId);
