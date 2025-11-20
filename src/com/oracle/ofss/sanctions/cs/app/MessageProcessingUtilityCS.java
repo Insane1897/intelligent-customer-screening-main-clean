@@ -50,6 +50,7 @@ public class MessageProcessingUtilityCS {
     private static Map<String, AnalysisMetrics> otMetrics = new HashMap<>();
     private static Map<String, RowContext> seqIdToContext = new HashMap<>();
     private static int truncatedCount = 0;
+    private static int truncatedComparisonCount = 0;
 
     private static class RowContext {
         String watchlist;
@@ -1209,9 +1210,62 @@ private static int writeChunkedTextToCell(Sheet sheet, Row row, int colIdx, Stri
                 }
 
                 // Write to columns
-                row.createCell(commonCol).setCellValue(commonJson.toString());
-                row.createCell(missingCol).setCellValue(missingJson.toString());
-                row.createCell(additionalCol).setCellValue(additionalJson.toString());
+                String commonContent = commonJson.toString();
+                if (commonContent.length() > ConstantsCS.MAX_MSG_LEN) {
+                    truncatedComparisonCount++;
+                    String subfolder = "comparison_jsons";
+                    try {
+                        java.nio.file.Path subPath = java.nio.file.Paths.get(ConstantsCS.OUTPUT_FOLDER.getPath(), subfolder);
+                        if (!java.nio.file.Files.exists(subPath)) {
+                            java.nio.file.Files.createDirectories(subPath);
+                        }
+                        String fileName = "common_" + seqId + ".json";
+                        java.nio.file.Path fullPath = java.nio.file.Paths.get(subPath.toString(), fileName);
+                        java.nio.file.Files.write(fullPath, commonContent.getBytes(ConstantsCS.ENCODER));
+                        commonContent = "TRUNCATED (see " + subfolder + "/" + fileName + "): Total=" + countMatches(commonJson);
+                    } catch (Exception e) {
+                        commonContent = "[comparison exceeds " + ConstantsCS.MAX_MSG_LEN + " chars and file save failed]";
+                    }
+                }
+                row.createCell(commonCol).setCellValue(commonContent);
+
+                String missingContent = missingJson.toString();
+                if (missingContent.length() > ConstantsCS.MAX_MSG_LEN) {
+                    truncatedComparisonCount++;
+                    String subfolder = "comparison_jsons";
+                    try {
+                        java.nio.file.Path subPath = java.nio.file.Paths.get(ConstantsCS.OUTPUT_FOLDER.getPath(), subfolder);
+                        if (!java.nio.file.Files.exists(subPath)) {
+                            java.nio.file.Files.createDirectories(subPath);
+                        }
+                        String fileName = "missing_" + seqId + ".json";
+                        java.nio.file.Path fullPath = java.nio.file.Paths.get(subPath.toString(), fileName);
+                        java.nio.file.Files.write(fullPath, missingContent.getBytes(ConstantsCS.ENCODER));
+                        missingContent = "TRUNCATED (see " + subfolder + "/" + fileName + "): Total=" + countMatches(missingJson);
+                    } catch (Exception e) {
+                        missingContent = "[comparison exceeds " + ConstantsCS.MAX_MSG_LEN + " chars and file save failed]";
+                    }
+                }
+                row.createCell(missingCol).setCellValue(missingContent);
+
+                String additionalContent = additionalJson.toString();
+                if (additionalContent.length() > ConstantsCS.MAX_MSG_LEN) {
+                    truncatedComparisonCount++;
+                    String subfolder = "comparison_jsons";
+                    try {
+                        java.nio.file.Path subPath = java.nio.file.Paths.get(ConstantsCS.OUTPUT_FOLDER.getPath(), subfolder);
+                        if (!java.nio.file.Files.exists(subPath)) {
+                            java.nio.file.Files.createDirectories(subPath);
+                        }
+                        String fileName = "additional_" + seqId + ".json";
+                        java.nio.file.Path fullPath = java.nio.file.Paths.get(subPath.toString(), fileName);
+                        java.nio.file.Files.write(fullPath, additionalContent.getBytes(ConstantsCS.ENCODER));
+                        additionalContent = "TRUNCATED (see " + subfolder + "/" + fileName + "): Total=" + countMatches(additionalJson);
+                    } catch (Exception e) {
+                        additionalContent = "[comparison exceeds " + ConstantsCS.MAX_MSG_LEN + " chars and file save failed]";
+                    }
+                }
+                row.createCell(additionalCol).setCellValue(additionalContent);
 
                 // Determine final status
                 boolean hasCommon = !commonByType.isEmpty();
@@ -1252,5 +1306,21 @@ private static int writeChunkedTextToCell(Sheet sheet, Row row, int colIdx, Stri
         System.out.println("\n=============================================================");
         System.out.println("             IN-MEMORY COMPARISON COMPLETED                  ");
         System.out.println("=============================================================");
+
+        if (truncatedComparisonCount > 0) {
+            System.out.println("[" + sdf.format(new Date()) + "] Truncated " + truncatedComparisonCount + " oversized comparison JSONs, full data saved to files in " + ConstantsCS.OUTPUT_FOLDER.getPath() + "/comparison_jsons");
+        }
+    }
+
+    private static int countMatches(JSONObject json) {
+        int count = 0;
+        @SuppressWarnings("unchecked")
+        Iterator<String> keys = json.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            JSONArray arr = json.optJSONArray(key);
+            if (arr != null) count += arr.length();
+        }
+        return count;
     }
 }
