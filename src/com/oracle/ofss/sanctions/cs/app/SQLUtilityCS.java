@@ -11,6 +11,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.stream.Collectors;
+
+import static com.oracle.ofss.sanctions.cs.app.ConstantsCS.*;
 
 public class SQLUtilityCS {
 public static Map<String, List<String>> loadLookup(String displayName) throws Exception {
@@ -48,7 +51,7 @@ public static Map<String, List<String>> loadLookupByIds(String idsCsv) throws Ex
     Map<String, List<String>> lookupMap = new HashMap<>();
     try (Connection conn = getDbConnection()) {
         String query = "SELECT v.v_lookup_values FROM fcc_idx_m_lookup_values v WHERE v.n_lookup_id IN (" + idsCsv + ")";
-        System.out.println("Executing stopword query: " + query);
+        System.out.println("Executing lookup query: " + query);
         try (PreparedStatement pstmt = conn.prepareStatement(query)) {
             try (ResultSet rs = pstmt.executeQuery()) {
                 int rowCount = 0;
@@ -56,20 +59,27 @@ public static Map<String, List<String>> loadLookupByIds(String idsCsv) throws Ex
                     rowCount++;
                     String values = rs.getString("v_lookup_values");
                     System.out.println("Row " + rowCount + ": v_lookup_values = " + values);
-                    if (values != null) {
+                    if (values != null && !values.trim().isEmpty()) {
                         String[] synonyms = values.split(",");
-                        for (String syn : synonyms) {
-                            String key = syn.trim().toUpperCase();
-                            List<String> list = lookupMap.computeIfAbsent(key, k -> new ArrayList<>());
-                            for (String s : synonyms) {
-                                if (!s.trim().equalsIgnoreCase(syn)) {
-                                    list.add(s.trim());
+                        if (synonyms.length > 1) { // Ensure at least one variant
+                            for (int i = 0; i < synonyms.length; i++) {
+                                String key = synonyms[i].trim().toLowerCase();
+                                List<String> variants = new ArrayList<>();
+                                for (int j = 0; j < synonyms.length; j++) {
+                                    if (j != i) { // Exclude self
+                                        String variant = synonyms[j].trim();
+                                        if (!variant.isEmpty()) {
+                                            variants.add(variant);
+                                        }
+                                    }
                                 }
+                                lookupMap.put(key, variants);
                             }
                         }
                     }
                 }
                 System.out.println("Total rows fetched for IDs " + idsCsv + ": " + rowCount);
+                System.out.println("Lookup map built with " + lookupMap.size() + " keys (base words): " + lookupMap.keySet().stream().limit(10).collect(Collectors.toList()));
             }
         }
     }

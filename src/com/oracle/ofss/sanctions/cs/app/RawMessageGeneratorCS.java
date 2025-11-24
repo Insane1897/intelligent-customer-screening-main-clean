@@ -37,7 +37,7 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 public class RawMessageGeneratorCS {
     private static class RowData {
         private Map<String, Object> data = new HashMap<>();
-        public Object get(String key) { return data.get(key.toUpperCase()); }
+    public Object get(String key) { return key == null ? null : data.get(key.toUpperCase()); }
         public void put(String key, Object value) { data.put(key.toUpperCase(), value); }
         public Set<String> keySet() { return data.keySet(); }
     }
@@ -116,6 +116,7 @@ public class RawMessageGeneratorCS {
                         props.getProperty(ConstantsCS.SYN_ENT_LOOKUP_IDS, "11");
                     synonymMap = SQLUtilityCS.loadLookupByIds(synLookupIds);
                     System.out.println("Loaded synonymMap for " + candidateType + ": " + synonymMap.size() + " entries");
+                    System.out.println("Sample synonymMap keys: " + synonymMap.keySet().stream().limit(10).collect(Collectors.toList()));
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -126,8 +127,14 @@ public class RawMessageGeneratorCS {
                     String stopLookupIds = "IND".equalsIgnoreCase(candidateType) ?
                         props.getProperty(ConstantsCS.STOP_IND_LOOKUP_IDS, "7,8") :
                         props.getProperty(ConstantsCS.STOP_ENT_LOOKUP_IDS, "1,4,10");
-                    stopwordList = SQLUtilityCS.loadFlatLookupValuesByIds(stopLookupIds);
-                    System.out.println("Loaded stopwordList for " + candidateType + ": " + stopwordList.size() + " entries");
+                    List<String> loadedStopwords = SQLUtilityCS.loadFlatLookupValuesByIds(stopLookupIds);
+                    if ("IND".equalsIgnoreCase(candidateType)) {
+                        indStopwordList = loadedStopwords;
+                        System.out.println("Loaded indStopwordList: " + indStopwordList.size() + " entries");
+                    } else {
+                        entStopwordList = loadedStopwords;
+                        System.out.println("Loaded entStopwordList: " + entStopwordList.size() + " entries");
+                    }
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -395,17 +402,28 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
             // Validation for required fields
             boolean isValid = false;
             if ("IND".equalsIgnoreCase(candidateType)) {
-                String firstName = asString(row.get(tokenToColumnMap.get("__FIRST_NAME__"))).trim();
-                String lastName = asString(row.get(tokenToColumnMap.get("__LAST_NAME__"))).trim();
-                String fullName = asString(row.get(tokenToColumnMap.get("__FULL_NAME__"))).trim();
-                isValid = (!firstName.isEmpty() && !lastName.isEmpty()) || !fullName.isEmpty();
+                String fullName = "";
+                boolean hasFirstLast = false;
+                if (tokenToColumnMap.containsKey("__FULL_NAME__")) {
+                    fullName = asString(row.get(tokenToColumnMap.get("__FULL_NAME__"))).trim();
+                }
+                if (tokenToColumnMap.containsKey("__FIRST_NAME__") && tokenToColumnMap.containsKey("__LAST_NAME__")) {
+                    String firstName = asString(row.get(tokenToColumnMap.get("__FIRST_NAME__"))).trim();
+                    String lastName = asString(row.get(tokenToColumnMap.get("__LAST_NAME__"))).trim();
+                    hasFirstLast = !firstName.isEmpty() && !lastName.isEmpty();
+                }
+                isValid = !fullName.isEmpty() || hasFirstLast;
                 if (!isValid) {
                     System.out.println("Skipping invalid IND row for UID " + uid + ": missing required names");
                     continue;
                 }
             } else if ("ENT".equalsIgnoreCase(candidateType)) {
-                String orgName = asString(row.get(tokenToColumnMap.get("__ORG_NAME__"))).trim();
-                isValid = !orgName.isEmpty();
+                if (tokenToColumnMap.containsKey("__ORG_NAME__")) {
+                    String orgName = asString(row.get(tokenToColumnMap.get("__ORG_NAME__"))).trim();
+                    isValid = !orgName.isEmpty();
+                } else {
+                    isValid = true; // No required fields if token not present
+                }
                 if (!isValid) {
                     System.out.println("Skipping invalid ENT row for UID " + uid + ": missing Org Name");
                     continue;
@@ -502,7 +520,16 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
 
             // Synonym variations
             if (enableSynonym) {
-                Map<String, List<String>> synMap = "IND".equalsIgnoreCase(candidateType) ? indSynonymMap : entSynonymMap;
+                Map<String, List<String>> synMap;
+                if ("IND".equalsIgnoreCase(candidateType)) {
+                    synMap = synonymMap; // Use synonymMap for IND
+                } else {
+                    synMap = entSynonymMap; // Use entSynonymMap for ENT
+                }
+                System.out.println("synonymMap size: " + synonymMap.size());
+                System.out.println("indSynonymMap size: " + indSynonymMap.size());
+                System.out.println("entSynonymMap size: " + entSynonymMap.size());
+                System.out.println("synMap size at use: " + synMap.size());
                 for (String variationToken : validVariationTokens) {
                     String baseValue = asString(row.get(tokenToColumnMap.get(variationToken)));
                     List<String> variants = generateSynonymVariants(baseValue, synMap);
@@ -838,12 +865,14 @@ private static List<String> generateStopwordVariants(String fullName, String sw)
 
 private static List<String> generateSynonymVariants(String fullName, Map<String, List<String>> synMap) {
         List<String> variants = new ArrayList<>();
+        System.out.println("Syn map size: " + synMap.size() + ", Sample keys: " + synMap.keySet().stream().limit(5).collect(Collectors.toList()));
+        System.out.println("Looking for 'ANNA': " + synMap.containsKey("ANNA") + ", value: " + synMap.get("ANNA"));
         String[] words = fullName.split("\\s+");
         List<List<String>> lists = new ArrayList<>();
         for (String word : words) {
             List<String> opts = new ArrayList<>();
             opts.add(word);
-            List<String> syns = synMap.get(word.toUpperCase());
+            List<String> syns = synMap.get(word.toLowerCase());
             if (syns != null) {
                 opts.addAll(syns);
                 System.out.println("Found synonyms for '" + word + "': " + syns);
