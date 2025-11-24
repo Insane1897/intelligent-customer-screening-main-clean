@@ -1153,20 +1153,8 @@ private static int writeChunkedTextToCell(Sheet sheet, Row row, int colIdx, Stri
                 Map<String, List<AnalysisUtil.MatchObject>> otAdditionalByType = new HashMap<>();
 
                 for (String type : new String[]{"SAN", "PEP", "EDD", "PRB"}) {
-                    List<AnalysisUtil.MatchObject> osList = osMetricsObj.matches.stream().filter(m -> {
-                        if ("SAN".equals(type)) return osMetricsObj.categories[0] > 0; // Placeholder, actual filter by ruleset
-                        if ("PEP".equals(type)) return osMetricsObj.categories[1] > 0;
-                        if ("EDD".equals(type)) return osMetricsObj.categories[2] > 0;
-                        if ("PRB".equals(type)) return osMetricsObj.categories[3] > 0;
-                        return false;
-                    }).collect(java.util.stream.Collectors.toList());
-                    List<AnalysisUtil.MatchObject> otList = otMetricsObj.matches.stream().filter(m -> {
-                        if ("SAN".equals(type)) return otMetricsObj.categories[0] > 0;
-                        if ("PEP".equals(type)) return otMetricsObj.categories[1] > 0;
-                        if ("EDD".equals(type)) return otMetricsObj.categories[2] > 0;
-                        if ("PRB".equals(type)) return otMetricsObj.categories[3] > 0;
-                        return false;
-                    }).collect(java.util.stream.Collectors.toList());
+                    List<AnalysisUtil.MatchObject> osList = osMetricsObj.matches.stream().filter(m -> type.equals(m.type)).collect(java.util.stream.Collectors.toList());
+                    List<AnalysisUtil.MatchObject> otList = otMetricsObj.matches.stream().filter(m -> type.equals(m.type)).collect(java.util.stream.Collectors.toList());
 
                     List<AnalysisUtil.MatchObject> common = new ArrayList<>();
                     List<AnalysisUtil.MatchObject> osRemaining = new ArrayList<>(osList);

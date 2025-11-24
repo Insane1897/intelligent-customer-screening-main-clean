@@ -398,6 +398,8 @@ public class MessageResponseAnalyzerCS {
                             if (!common.isEmpty()) commonByType.put(type, common);
                             if (!osRemaining.isEmpty()) osMissingByType.put(type, osRemaining);
                             if (!otRemaining.isEmpty()) otAdditionalByType.put(type, otRemaining);
+
+                            System.out.println("Type: " + type + ", OS size: " + osList.size() + ", OT size: " + otList.size() + ", Common: " + common.size() + ", OS Missing: " + osRemaining.size() + ", OT Additional: " + otRemaining.size());
                         }
 
                         // Create JSON strings
@@ -640,10 +642,12 @@ public class MessageResponseAnalyzerCS {
                             }
                         }
                         String type = "PRB"; // Default to PRB
-                        if (rulesetId.contains("SAN")) type = "SAN";
-                        else if (rulesetId.contains("PEP")) type = "PEP";
-                        else if (rulesetId.contains("EDD")) type = "EDD";
-                        else if (rulesetId.toLowerCase().contains("country")) type = "PRB";
+                        if (rulesetId.toUpperCase().contains("SAN WATCHLIST")) type = "SAN";
+                        else if (rulesetId.toUpperCase().contains("PEP WATCHLIST")) type = "PEP";
+                        else if (rulesetId.toUpperCase().contains("EDD WATCHLIST")) type = "EDD";
+                        else if (rulesetId.toUpperCase().contains("COUNTRY PROHIBITION") || rulesetId.toUpperCase().contains("PROHIBITION")) type = "PRB";
+
+                        System.out.println("Engine: " + engine + ", Ruleset: '" + rulesetId + "', Assigned Type: " + type + ", Match Count: " + (matches != null ? matches.length() : 0));
                         rms.matchesByType.computeIfAbsent(type, k -> new java.util.ArrayList<>()).add(new MatchObject(n_uid, watchlist, ruleName, matchedCols));
                     }
                 }
