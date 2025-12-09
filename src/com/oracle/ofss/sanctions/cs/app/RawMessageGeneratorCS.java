@@ -526,13 +526,15 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
                 } else {
                     synMap = entSynonymMap; // Use entSynonymMap for ENT
                 }
+                int synonymMaxCombos = Integer.parseInt(props.getProperty(ConstantsCS.SYNONYM_MAX_COMBOS, "200"));
                 System.out.println("synonymMap size: " + synonymMap.size());
                 System.out.println("indSynonymMap size: " + indSynonymMap.size());
                 System.out.println("entSynonymMap size: " + entSynonymMap.size());
                 System.out.println("synMap size at use: " + synMap.size());
+                System.out.println("Using synonymMaxCombos: " + synonymMaxCombos);
                 for (String variationToken : validVariationTokens) {
                     String baseValue = asString(row.get(tokenToColumnMap.get(variationToken)));
-                    List<String> variants = generateSynonymVariants(baseValue, synMap);
+                    List<String> variants = generateSynonymVariants(baseValue, synMap, synonymMaxCombos);
                     for (String variant : variants) {
                         Map<String, String> tokenToVariant = new HashMap<>();
                         for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
@@ -606,10 +608,11 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
             // Combined synonyms
             if (enableSynonym) {
                 Map<String, List<String>> synMap = "IND".equalsIgnoreCase(candidateType) ? indSynonymMap : entSynonymMap;
+                int synonymMaxCombos = Integer.parseInt(props.getProperty(ConstantsCS.SYNONYM_MAX_COMBOS, "200"));
                 List<List<String>> allVariantsLists = new ArrayList<>();
                 for (String variationToken : validVariationTokens) {
                     String baseValue = asString(row.get(tokenToColumnMap.get(variationToken)));
-                    List<String> variants = generateSynonymVariants(baseValue, synMap);
+                    List<String> variants = generateSynonymVariants(baseValue, synMap, synonymMaxCombos);
                     allVariantsLists.add(variants);
                 }
                 List<List<String>> variantCombos = generateCombinations(allVariantsLists);
@@ -863,7 +866,7 @@ private static List<String> generateStopwordVariants(String fullName, String sw)
         return variants;
     }
 
-private static List<String> generateSynonymVariants(String fullName, Map<String, List<String>> synMap) {
+private static List<String> generateSynonymVariants(String fullName, Map<String, List<String>> synMap, int maxCombos) {
         List<String> variants = new ArrayList<>();
         System.out.println("Syn map size: " + synMap.size() + ", Sample keys: " + synMap.keySet().stream().limit(5).collect(Collectors.toList()));
         System.out.println("Looking for 'ANNA': " + synMap.containsKey("ANNA") + ", value: " + synMap.get("ANNA"));
@@ -887,7 +890,11 @@ private static List<String> generateSynonymVariants(String fullName, Map<String,
             String var = String.join(" ", combo);
             if (!var.equals(fullName)) variants.add(var);
         }
-        System.out.println("Final synonym variants: " + variants.size());
+        System.out.println("Generated synonym variants before limit: " + variants.size());
+        if (variants.size() > maxCombos) {
+            variants = variants.subList(0, maxCombos);
+        }
+        System.out.println("Final synonym variants after limit: " + variants.size());
         return variants;
     }
 

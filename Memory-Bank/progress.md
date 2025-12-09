@@ -17,6 +17,7 @@
 - **Connectivity Fixes**: Matched headers to working cURL: posting.ofsRemoteUser=appuser, posting.cookieEnvId=vtltbj-prd, removed mismatched headers, increased connectTimeout to 60s
 - **GET Polling Implementation**: Removed ?reqId, added posting.getPollAttempts=10 and posting.getPollDelaySeconds=5, polls GET with 5s delays to handle 25s API processing time, increased requestTimeoutSeconds to 60s
 - **cURL HTTP Implementation**: Added posting.useCurl=Y, posting.curlPath=curl, executes cURL commands via ProcessBuilder with exact headers, -w for status codes, bypasses HttpClient network issues
+- **JSON Truncation Naming**: Modified oversized JSON file naming to use requestId instead of seqId for improved traceability (e.g., {engine}_response_full_{requestId}.json and {engine}_full_{requestId}.json)
 
 ## What's Left to Build
 - **Complete Testing**: Unit tests for all utility classes

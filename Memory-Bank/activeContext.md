@@ -10,6 +10,7 @@ Implemented cURL-based HTTP requests to bypass HttpClient connect issues.
 - GET polling preserved with cURL commands
 - HttpClient kept as fallback (useCurl=N)
 - All previous fixes maintained: header matching, cookie, polling, timeouts
+- Modified JSON truncation filename: Changed from appending seqId to requestId for better traceability in oversized response and ruleset files (e.g., OT_response_full_{requestId}.json instead of OT_response_full_{seqId}.json)
 
 ## Next Steps
 - Test cURL implementation - should connect successfully using system proxy/SSL

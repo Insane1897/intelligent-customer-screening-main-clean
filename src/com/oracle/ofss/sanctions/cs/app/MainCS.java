@@ -7,8 +7,13 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Properties;
 
+import org.apache.poi.openxml4j.util.ZipSecureFile;
+
 public class MainCS {
     public static void main(String[] args) throws Exception {
+        // Disable POI zip bomb protection to allow large/compressed Excel files
+        ZipSecureFile.setMinInflateRatio(0.001);
+
         Properties props = new Properties();
         try (FileReader reader = new FileReader(ConstantsCS.CONFIG_FILE_PATH)) {
             props.load(reader);

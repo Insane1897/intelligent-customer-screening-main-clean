@@ -629,7 +629,8 @@ public class MessageProcessingUtilityCS {
                         if (!java.nio.file.Files.exists(subPath)) {
                             java.nio.file.Files.createDirectories(subPath);
                         }
-                        String fileName = matchingEngine + "_full_" + seqId + ".json";
+                        String requestIdForFile = result.requestId != null ? result.requestId : seqId;
+                        String fileName = matchingEngine + "_full_" + requestIdForFile + ".json";
                         java.nio.file.Path fullPath = java.nio.file.Paths.get(subPath.toString(), fileName);
                         java.nio.file.Files.write(fullPath, rulesetContent.getBytes(ConstantsCS.ENCODER));
                         rulesetContent = "TRUNCATED (see " + subfolder + "/" + fileName + "): Total=" + (currentEngineMetrics.get(seqId) != null ? currentEngineMetrics.get(seqId).total : 0);
@@ -649,7 +650,8 @@ public class MessageProcessingUtilityCS {
                         if (!java.nio.file.Files.exists(subPath)) {
                             java.nio.file.Files.createDirectories(subPath);
                         }
-                        String fileName = matchingEngine + "_response_full_" + seqId + ".json";
+                        String requestIdForFile = result.requestId != null ? result.requestId : seqId;
+                        String fileName = matchingEngine + "_response_full_" + requestIdForFile + ".json";
                         java.nio.file.Path fullPath = java.nio.file.Paths.get(subPath.toString(), fileName);
                         java.nio.file.Files.write(fullPath, responseContent.getBytes(ConstantsCS.ENCODER));
                         responseContent = "TRUNCATED (see " + subfolder + "/" + fileName + ")";
