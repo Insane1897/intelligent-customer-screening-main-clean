@@ -79,6 +79,18 @@ public class AnalysisUtil {
         Map.entry("FCC_WL_PRIVATELIST_OT", "PRV_WL1")
     );
 
+    public static class MatchCol {
+        public String searchString;
+        public String searchStringTrans;
+        public String colName;
+        public String colValue;
+        public String colValueTrans;
+        public String searchType;
+        public double score;
+
+        public MatchCol() {}
+    }
+
     public static boolean checkMatch(String resultJson, String watchlist, String n_uid, String targetColumn, String engine) {
         if (resultJson == null || resultJson.isEmpty()) return false;
         Map<String, String> indexMap = wlToIndex.get(watchlist);
@@ -154,14 +166,18 @@ public class AnalysisUtil {
         String ruleName;
         List<String> matchedCols;
         String type; // Added type field
+        List<MatchCol> matchCols;
+        double finalScore;
 
-        MatchObject(String n_uid, String watchlist, String ruleName, List<String> matchedCols, String type) {
+        MatchObject(String n_uid, String watchlist, String ruleName, List<String> matchedCols, String type, List<MatchCol> matchCols, double finalScore) {
             this.n_uid = n_uid;
             this.watchlist = watchlist;
             this.ruleName = ruleName;
             this.matchedCols = new ArrayList<>(matchedCols);
             Collections.sort(this.matchedCols);
             this.type = type;
+            this.matchCols = new ArrayList<>(matchCols);
+            this.finalScore = finalScore;
         }
 
         @Override
@@ -182,11 +198,26 @@ public class AnalysisUtil {
 
         @Override
         public String toString() {
+            JSONArray matchColsArray = new JSONArray();
+            for (MatchCol mc : matchCols) {
+                JSONObject mcJson = new JSONObject();
+                mcJson.put("searchString", mc.searchString);
+                mcJson.put("searchStringTrans", mc.searchStringTrans);
+                mcJson.put("colName", mc.colName);
+                mcJson.put("colValue", mc.colValue);
+                mcJson.put("colValueTrans", mc.colValueTrans);
+                mcJson.put("searchType", mc.searchType);
+                mcJson.put("score", mc.score);
+                matchColsArray.put(mcJson);
+            }
             return new JSONObject()
                 .put("n_uid", n_uid)
                 .put("watchlist", watchlist)
                 .put("ruleName", ruleName)
                 .put("matchedCols", new JSONArray(matchedCols))
+                .put("matchCols", matchColsArray)
+                .put("type", type)
+                .put("finalScore", finalScore)
                 .toString();
         }
     }
@@ -220,12 +251,29 @@ public class AnalysisUtil {
                                 matchedCols.add(matchedColsJson.getString(k));
                             }
                         }
+                        JSONArray matchColsJson = match.optJSONArray("matchCols");
+                        List<MatchCol> matchColsList = new ArrayList<>();
+                        if (matchColsJson != null) {
+                            for (int j = 0; j < matchColsJson.length(); j++) {
+                                JSONObject mcJson = matchColsJson.getJSONObject(j);
+                                MatchCol mc = new MatchCol();
+                                mc.searchString = mcJson.optString("searchString", "");
+                                mc.searchStringTrans = mcJson.optString("searchStringTrans", "");
+                                mc.colName = mcJson.optString("colName", "");
+                                mc.colValue = mcJson.optString("colValue", "");
+                                mc.colValueTrans = mcJson.optString("colValueTrans", "");
+                                mc.searchType = mcJson.optString("searchType", "");
+                                mc.score = mcJson.optDouble("score", 0.0);
+                                matchColsList.add(mc);
+                            }
+                        }
+                        double finalScore = match.optDouble("finalScore", 0.0);
                         String type = "PRB"; // Default to PRB
                         if (rulesetId.contains("SAN")) type = "SAN";
                         else if (rulesetId.contains("PEP")) type = "PEP";
                         else if (rulesetId.contains("EDD")) type = "EDD";
                         else if (rulesetId.toLowerCase().contains("country")) type = "PRB";
-                        rms.matchesByType.computeIfAbsent(type, k -> new ArrayList<>()).add(new MatchObject(n_uid, watchlist, ruleName, matchedCols, type));
+                        rms.matchesByType.computeIfAbsent(type, k -> new ArrayList<>()).add(new MatchObject(n_uid, watchlist, ruleName, matchedCols, type, matchColsList, finalScore));
                     }
                 }
             }

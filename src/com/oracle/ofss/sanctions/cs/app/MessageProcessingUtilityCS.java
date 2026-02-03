@@ -340,10 +340,20 @@ public class MessageProcessingUtilityCS {
                     executeConn.setRequestProperty("Cookie", "OFSEnvID=" + cookieEnvId);
                 }
                 executeConn.setHostnameVerifier((hostname, sslSession) -> true);
+                executeConn.setConnectTimeout(30000); // 30s for connection
+                System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] Using postReadTimeout: " + postReadTimeout + " ms");
                 executeConn.setReadTimeout(postReadTimeout);
                 executeConn.setDoOutput(true);
+
+                // Parse requestBody as root JSON and add requestedBy to the root
+                JSONObject rootJson = new JSONObject(requestBody);
+                rootJson.put("requestedBy", "UtilityUser");
+                String wrappedBody = rootJson.toString();
+
+                System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] Full POST body: " + wrappedBody);
+
                 try (OutputStream os = executeConn.getOutputStream()) {
-                    os.write(requestBody.getBytes(ConstantsCS.ENCODER));
+                    os.write(wrappedBody.getBytes(ConstantsCS.ENCODER));
                     os.flush();
                 }
 
@@ -370,9 +380,9 @@ public class MessageProcessingUtilityCS {
                 executeConn.disconnect();
 
                 String postResponseStr = apiResponse.toString().trim();
-                // Log full response on 500 for debugging
-                if (responseCode == 500) {
-                    System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] Full POST response body on 500: " + postResponseStr);
+                // Log full response on 200 or 500 for debugging
+                if (responseCode == 200 || responseCode == 500) {
+                    System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] Full POST response body on " + responseCode + ": " + postResponseStr);
                 }
                 // System.out.println("[" + sdf.format(new Date()) + "] [SeqId: " + seqId + "] POST body received: " + postResponseStr);
                 Map<String, List<String>> headers = executeConn.getHeaderFields();
@@ -940,6 +950,14 @@ public class MessageProcessingUtilityCS {
         return resultsMap;
     }
 
+    private static String deriveType(String ruleSetId) {
+        if (ruleSetId.contains("SAN")) return "SAN";
+        else if (ruleSetId.contains("PEP")) return "PEP";
+        else if (ruleSetId.contains("EDD")) return "EDD";
+        else if (ruleSetId.toLowerCase().contains("country")) return "PRB";
+        return "PRB"; // default
+    }
+
     private static void processChunk(List<String> chunk, Connection conn, Map<String, String> indMap, Map<String, String> entMap, String defaultCandidateType, Map<String, String> requestIdToType, Map<String, JSONObject> tempResults) throws SQLException {
         PreparedStatement pstmt = null;
         ResultSet rs = null;
@@ -984,6 +1002,24 @@ public class MessageProcessingUtilityCS {
                             }
                             matchSum.put("matchedCols", matchedCols);
                             matchSum.put("ruleName", match.optString("ruleName", "NA"));
+                            // Add detailed matchCols
+                            JSONArray detailedMatchCols = new JSONArray();
+                            if (matchCols != null) {
+                                for (int j = 0; j < matchCols.length(); j++) {
+                                    JSONObject mc = matchCols.getJSONObject(j);
+                                    JSONObject slimMc = new JSONObject();
+                                    slimMc.put("searchString", mc.optString("searchString", ""));
+                                    slimMc.put("searchStringTrans", mc.optString("searchStringTrans", ""));
+                                    slimMc.put("colName", mc.optString("colName", ""));
+                                    slimMc.put("colValue", mc.optString("colValue", ""));
+                                    slimMc.put("colValueTrans", mc.optString("colValueTrans", ""));
+                                    slimMc.put("searchType", mc.optString("searchType", ""));
+                                    slimMc.put("score", mc.optDouble("score", 0.0));
+                                    detailedMatchCols.put(slimMc);
+                                }
+                            }
+                            matchSum.put("matchCols", detailedMatchCols);
+                            matchSum.put("type", deriveType(ruleSetId));
                             matchesSummary.put(matchSum);
                         }
                     }
@@ -1134,6 +1170,10 @@ private static int writeChunkedTextToCell(Sheet sheet, Row row, int colIdx, Stri
                 finalStatusCol = nextCol++;
                 headerRow.createCell(finalStatusCol).setCellValue("Final Status");
             }
+            int osCommonCol = nextCol++;
+            headerRow.createCell(osCommonCol).setCellValue("OS COMMON MATCHES");
+            int otCommonCol = nextCol++;
+            headerRow.createCell(otCommonCol).setCellValue("OT COMMON MATCHES");
 
             DataFormatter formatter = new DataFormatter();
 
@@ -1153,12 +1193,15 @@ private static int writeChunkedTextToCell(Sheet sheet, Row row, int colIdx, Stri
                 Map<String, List<AnalysisUtil.MatchObject>> commonByType = new HashMap<>();
                 Map<String, List<AnalysisUtil.MatchObject>> osMissingByType = new HashMap<>();
                 Map<String, List<AnalysisUtil.MatchObject>> otAdditionalByType = new HashMap<>();
+                Map<String, List<AnalysisUtil.MatchObject>> commonOsByType = new HashMap<>();
+                Map<String, List<AnalysisUtil.MatchObject>> commonOtByType = new HashMap<>();
 
                 for (String type : new String[]{"SAN", "PEP", "EDD", "PRB"}) {
                     List<AnalysisUtil.MatchObject> osList = osMetricsObj.matches.stream().filter(m -> type.equals(m.type)).collect(java.util.stream.Collectors.toList());
                     List<AnalysisUtil.MatchObject> otList = otMetricsObj.matches.stream().filter(m -> type.equals(m.type)).collect(java.util.stream.Collectors.toList());
 
-                    List<AnalysisUtil.MatchObject> common = new ArrayList<>();
+                    List<AnalysisUtil.MatchObject> commonOs = new ArrayList<>();
+                    List<AnalysisUtil.MatchObject> commonOt = new ArrayList<>();
                     List<AnalysisUtil.MatchObject> osRemaining = new ArrayList<>(osList);
                     List<AnalysisUtil.MatchObject> otRemaining = new ArrayList<>(otList);
 
@@ -1166,13 +1209,16 @@ private static int writeChunkedTextToCell(Sheet sheet, Row row, int colIdx, Stri
                         AnalysisUtil.MatchObject osMatch = osRemaining.get(i);
                         int idx = otRemaining.indexOf(osMatch);
                         if (idx != -1) {
-                            common.add(osMatch);
+                            commonOs.add(osMatch);
+                            commonOt.add(otRemaining.get(idx));
                             osRemaining.remove(i);
                             otRemaining.remove(idx);
                         }
                     }
 
-                    if (!common.isEmpty()) commonByType.put(type, common);
+                    if (!commonOs.isEmpty()) commonByType.put(type, commonOs);
+                    if (!commonOs.isEmpty()) commonOsByType.put(type, commonOs);
+                    if (!commonOt.isEmpty()) commonOtByType.put(type, commonOt);
                     if (!osRemaining.isEmpty()) osMissingByType.put(type, osRemaining);
                     if (!otRemaining.isEmpty()) otAdditionalByType.put(type, otRemaining);
                 }
@@ -1263,7 +1309,13 @@ private static int writeChunkedTextToCell(Sheet sheet, Row row, int colIdx, Stri
                 boolean hasAdditional = !otAdditionalByType.isEmpty();
 
                 String status;
-                if (!hasCommon) {
+                if (!hasCommon && !hasMissing) {
+                    if (!hasAdditional) {
+                        status = "Exact";
+                    } else {
+                        status = "Exact - Additional OT Matches";
+                    }
+                } else if (!hasCommon) {
                     status = "Missing Required";
                 } else if (!hasMissing && !hasAdditional) {
                     status = "Exact";
@@ -1286,6 +1338,58 @@ private static int writeChunkedTextToCell(Sheet sheet, Row row, int colIdx, Stri
                 }
                 style.setFillPattern(FillPatternType.SOLID_FOREGROUND);
                 statusCell.setCellStyle(style);
+
+                // OS COMMON MATCHES
+                JSONObject osCommonJson = new JSONObject();
+                for (Map.Entry<String, List<AnalysisUtil.MatchObject>> entry : commonOsByType.entrySet()) {
+                    JSONArray arr = new JSONArray();
+                    for (AnalysisUtil.MatchObject mo : entry.getValue()) arr.put(new JSONObject(mo.toString()));
+                    osCommonJson.put(entry.getKey(), arr);
+                }
+                String osCommonContent = osCommonJson.toString();
+                if (osCommonContent.length() > ConstantsCS.MAX_MSG_LEN) {
+                    truncatedComparisonCount++;
+                    String subfolder = "comparison_jsons";
+                    try {
+                        java.nio.file.Path subPath = java.nio.file.Paths.get(ConstantsCS.OUTPUT_FOLDER.getPath(), subfolder);
+                        if (!java.nio.file.Files.exists(subPath)) {
+                            java.nio.file.Files.createDirectories(subPath);
+                        }
+                        String fileName = "os_common_" + seqId + ".json";
+                        java.nio.file.Path fullPath = java.nio.file.Paths.get(subPath.toString(), fileName);
+                        java.nio.file.Files.write(fullPath, osCommonContent.getBytes(ConstantsCS.ENCODER));
+                        osCommonContent = "TRUNCATED (see " + subfolder + "/" + fileName + "): Total=" + countMatches(osCommonJson);
+                    } catch (Exception e) {
+                        osCommonContent = "[comparison exceeds " + ConstantsCS.MAX_MSG_LEN + " chars and file save failed]";
+                    }
+                }
+                row.createCell(osCommonCol).setCellValue(osCommonContent);
+
+                // OT COMMON MATCHES
+                JSONObject otCommonJson = new JSONObject();
+                for (Map.Entry<String, List<AnalysisUtil.MatchObject>> entry : commonOtByType.entrySet()) {
+                    JSONArray arr = new JSONArray();
+                    for (AnalysisUtil.MatchObject mo : entry.getValue()) arr.put(new JSONObject(mo.toString()));
+                    otCommonJson.put(entry.getKey(), arr);
+                }
+                String otCommonContent = otCommonJson.toString();
+                if (otCommonContent.length() > ConstantsCS.MAX_MSG_LEN) {
+                    truncatedComparisonCount++;
+                    String subfolder = "comparison_jsons";
+                    try {
+                        java.nio.file.Path subPath = java.nio.file.Paths.get(ConstantsCS.OUTPUT_FOLDER.getPath(), subfolder);
+                        if (!java.nio.file.Files.exists(subPath)) {
+                            java.nio.file.Files.createDirectories(subPath);
+                        }
+                        String fileName = "ot_common_" + seqId + ".json";
+                        java.nio.file.Path fullPath = java.nio.file.Paths.get(subPath.toString(), fileName);
+                        java.nio.file.Files.write(fullPath, otCommonContent.getBytes(ConstantsCS.ENCODER));
+                        otCommonContent = "TRUNCATED (see " + subfolder + "/" + fileName + "): Total=" + countMatches(otCommonJson);
+                    } catch (Exception e) {
+                        otCommonContent = "[comparison exceeds " + ConstantsCS.MAX_MSG_LEN + " chars and file save failed]";
+                    }
+                }
+                row.createCell(otCommonCol).setCellValue(otCommonContent);
             }
 
             try (FileOutputStream fos = new FileOutputStream(ConstantsCS.OUTPUT_XLSX_FILE_PATH)) {

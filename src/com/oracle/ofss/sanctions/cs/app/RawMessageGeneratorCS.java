@@ -276,7 +276,7 @@ public class RawMessageGeneratorCS {
             wlFilter = " V_ENTITY_TYPE != 'I'";
         }
         if (!wlFilter.isEmpty()) {
-            filter += " AND " + wlFilter;
+            filter = " where " + wlFilter + " AND " + baseFilter;
         }
 
         // Build SELECT clause with required columns

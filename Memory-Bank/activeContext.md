@@ -1,7 +1,7 @@
 # Active Context
 
 ## Current Work Focus
-Implemented cURL-based HTTP requests to bypass HttpClient connect issues.
+Enhanced Excel reporting for sanctions screening results with detailed match data inclusion.
 
 ## Recent Changes
 - Added cURL execution: posting.useCurl=Y, posting.curlPath=curl
@@ -11,11 +11,18 @@ Implemented cURL-based HTTP requests to bypass HttpClient connect issues.
 - HttpClient kept as fallback (useCurl=N)
 - All previous fixes maintained: header matching, cookie, polling, timeouts
 - Modified JSON truncation filename: Changed from appending seqId to requestId for better traceability in oversized response and ruleset files (e.g., OT_response_full_{requestId}.json instead of OT_response_full_{seqId}.json)
+- Enhanced Excel output for detailed match analysis:
+  - Extended RULESET_RESULTS (OS/OT) JSON with matchCols array containing: searchString, searchStringTrans, colName, colValue, colValueTrans, searchType, score
+  - Enriched comparison columns (Common Matches, OS Missing, Additional Matches in OT) with full matchCols details in MatchObject serialization, now including finalScore
+  - Added two new columns: OS COMMON MATCHES and OT COMMON MATCHES, containing common matches with engine-specific data (including finalScore)
+  - Updated AnalysisUtil.MatchObject to include MatchCol list with 7 fields and finalScore; enhanced parsing from DB JSON
+  - Maintained backward compatibility and truncation handling for oversized JSONs
 
 ## Next Steps
-- Test cURL implementation - should connect successfully using system proxy/SSL
-- Monitor logs for cURL command execution and status codes
-- If cURL works, document as solution for Java network issues
+- Test enhanced Excel output - verify new columns populate with detailed match data
+- Run OS/OT screening to confirm RULESET_RESULTS and comparison sections include enriched JSON
+- Monitor for any performance impact from additional JSON processing
+- If successful, document as improvement for compliance reporting
 
 ## Active Decisions and Considerations
 - Project uses Java with Oracle JDBC for database connectivity
