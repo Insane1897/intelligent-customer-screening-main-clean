@@ -359,7 +359,14 @@ public class RawMessageGeneratorCS {
             List<List<String>> allValueLists = new ArrayList<>();
             List<String> allColumns = new ArrayList<>();
             for (Map.Entry<String, String> entry : tokenToColumnMap.entrySet()) {
+                String token = entry.getKey();
                 String column = entry.getValue();
+
+                // Alias is an array field in JSON; don't use it for row/cartesian splitting.
+                if ("__ALIAS__".equalsIgnoreCase(token) || "V_ALIASES".equalsIgnoreCase(column)) {
+                    continue;
+                }
+
                 allColumns.add(column);
                 String value = asString(row.get(column));
                 List<String> values = new ArrayList<>();
@@ -720,7 +727,22 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
 
             // Determine the JSON field for the token
             String field = getJsonFieldForToken(token);
-            candidate.put(field, value);
+
+            // Alias needs array population: split by ';' and trim
+            if ("__ALIAS__".equalsIgnoreCase(token)) {
+                JSONArray aliasArray = new JSONArray();
+                if (value != null && !value.trim().isEmpty()) {
+                    for (String alias : value.split(";")) {
+                        String trimmed = alias.trim();
+                        if (!trimmed.isEmpty()) {
+                            aliasArray.put(trimmed);
+                        }
+                    }
+                }
+                candidate.put(field, aliasArray);
+            } else {
+                candidate.put(field, value);
+            }
         }
 
         return jsonObj;
@@ -733,6 +755,7 @@ private static void generateRawMessagesForRows(List<RowData> rows, Properties pr
             case "__FIRST_NAME__": return "First Name";
             case "__LAST_NAME__": return "Last Name";
             case "__DATE_OF_BIRTHS__": return "Date Of Birth";
+            case "__ALIAS__": return "Alias";
             // Add more as needed
             default: return "Full Name"; // fallback
         }
